@@ -351,9 +351,10 @@ REXCVAR_DEFINE_BOOL(skate3_coord_log, false, "Skate 3",
                     "to <app root>/coord_dump/skate3_coords.log.");
 REXCVAR_DEFINE_BOOL(skate3_coord_capture, false, "Skate 3",
                     "Arm the F11 OTS candidate capture (writes one JSON line "
-                    "to <app root>/OTS_candidates.json per press). Also armed "
-                    "while skate3_show_coords is on. ESC menu: Interface "
-                    "section.");
+                    "to <app root>/OTS_candidates.json per press). Standalone "
+                    "— the skater samples stamp with or without the HUD; "
+                    "also armed while skate3_show_coords is on. ESC menu: "
+                    "Interface section.");
 
 namespace skate3::coord_dump {
 namespace {
@@ -538,10 +539,10 @@ std::thread StartLogThread() {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     const std::filesystem::path path = dir / "skate3_coords.log";
-    REXLOG_INFO("Skate 3 coord dump: logging to {}", path.string());
     FILE* f = nullptr;
     uint64_t lines = 0;
     bool logged_open_fail = false;
+    bool logged_start = false;  // announces the path on the first ACTUAL write
     for (;;) {
       if (!REXCVAR_GET(skate3_coord_log)) {
         if (f) {
@@ -562,6 +563,10 @@ std::thread StartLogThread() {
           continue;
         }
         logged_open_fail = false;
+        if (!logged_start) {
+          REXLOG_INFO("Skate 3 coord dump: logging to {}", path.string());
+          logged_start = true;
+        }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(250));  // ~4 Hz
       // Samples fresher than 2 s count as live; older ones print as "-".
@@ -785,11 +790,21 @@ bool NearestItemProbe(const float from[3], ItemProbe* out) {
 
 // The taps (guest threads).
 
+// Any armed consumer keeps the sample-stamping taps running (PASS 41): the
+// OTS capture arm alone (skate3_coord_capture, without the HUD or the log)
+// must still produce fresh samples for the F11 line — the bug report was
+// captures with null pos when the coords HUD was off. Only the HUD DRAWING
+// stays behind skate3_show_coords.
+bool AnyConsumerArmed() {
+  return REXCVAR_GET(skate3_show_coords) || REXCVAR_GET(skate3_coord_log) ||
+         REXCVAR_GET(skate3_coord_capture);
+}
+
 void OnViewMatrix(uint8_t* base, uint32_t cam, uint32_t mtx, bool is_main) {
   if (!is_main || mtx == 0 || cam == 0) {
     return;
   }
-  if (!REXCVAR_GET(skate3_show_coords) && !REXCVAR_GET(skate3_coord_log)) {
+  if (!AnyConsumerArmed()) {
     return;
   }
   g_tap_cam.fetch_add(1, std::memory_order_relaxed);
@@ -828,7 +843,7 @@ void OnSkaterEntity(uint8_t* base, uint32_t entity) {
   if (entity == 0) {
     return;
   }
-  if (!REXCVAR_GET(skate3_show_coords) && !REXCVAR_GET(skate3_coord_log)) {
+  if (!AnyConsumerArmed()) {
     return;
   }
   g_tap_skater.fetch_add(1, std::memory_order_relaxed);
@@ -861,10 +876,7 @@ void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 }
 
 void CaptureOtsCandidate() {
-  const bool armed = REXCVAR_GET(skate3_coord_capture) ||
-                     REXCVAR_GET(skate3_show_coords) ||
-                     REXCVAR_GET(skate3_coord_log);
-  if (!armed) {
+  if (!AnyConsumerArmed()) {
     static std::atomic<uint32_t> s_unarmed_logged{0};
     const uint32_t n = s_unarmed_logged.fetch_add(1, std::memory_order_relaxed);
     if (n < 3) {

@@ -40,9 +40,10 @@
 // never on the guest thread (the synchronous-fwrite boot-hang lesson,
 // src/skate3_loc_dump.cpp header).
 //
-// OTS candidate capture (PASS 40): the F11 hotkey (bind
-// bind_skate3_ots_capture, armed when skate3_coord_capture or
-// skate3_show_coords is on — both are ESC-menu items) snapshots the last
+// OTS candidate capture (PASS 40, tap fix PASS 41): the F11 hotkey (bind
+// bind_skate3_ots_capture, armed when skate3_coord_capture OR
+// skate3_show_coords OR skate3_coord_log is on — all ESC-menu items)
+// snapshots the last
 // known skater position (+ staleness flag), the render camera, the world
 // district (the guest's own streamed DIST_<Name> chunk token, tracked by
 // the VFS layer) and the nearest rendered item the game tracks around the

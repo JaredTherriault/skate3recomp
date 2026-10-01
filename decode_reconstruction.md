@@ -255,3 +255,22 @@ ninja link clean; 038 session boot = no crash, no OTS file on boot
 (hotkey inert), zero coord activity; symbols present (nm); DIST-tracker
 and anchor-probe behavior = in-sim only, user-verified next run. NO
 game-tree file touched.
+
+# PASS 41 (2026-10-01) — capture arming decoupled from the HUD
+
+The sample-stamping taps (OnSkaterEntity / OnViewMatrix,
+skate3_loc_dump.cpp) gated on show_coords || coord_log, so
+skate3_coord_capture=true alone left every F11 capture with pos=null
+(the user's report: captures at the same obstacle, one with the HUD on,
+one without — the without-HUD ones null). Fixed with the user's
+PREFERRED route (no fallback needed): a single AnyConsumerArmed()
+(show_coords || coord_log || coord_capture) now drives both taps and
+the capture's own arm check; only the HUD drawing stays behind
+show_coords. The staleness contract unchanged: null only when no
+sample was ever stamped; >2 s samples report with pos_stale=true.
+Same-file cleanup: the coord-log thread's path announcement moved to
+the first actual write (capture-only boots now print zero coord-dump
+lines). Verified: ninja link clean; capture-only boot smoke (the
+user's own settings.toml state, untouched) = zero coord activity, no
+output files; the F11 press itself = user retest. NO game-tree file
+touched.
