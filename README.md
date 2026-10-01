@@ -4,6 +4,8 @@
   <img alt="Skate 3 Native PC Recompilation" src="banner-light.png">
 </picture>
 
+**To be clear this fork is an AI slop attempt to allow for custom content so I can have endless Own the Spot challenges. It's a free-time project and not reflective of my human coding ability.**
+
 An unofficial native recompilation of the Xbox 360 version of Skate 3, supporting Windows, Linux, and macOS.
 
 As of v2.0.0, the game runs on a native renderer built directly on Direct3D 12 and Vulkan instead of emulating the Xbox 360 GPU. Compared to the emulated renderer it delivers more than twice the frame rate at roughly a quarter of the GPU power draw, and on Apple Silicon the frame rate uplift is closer to 10x.
