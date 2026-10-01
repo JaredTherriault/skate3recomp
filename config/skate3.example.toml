@@ -84,3 +84,22 @@ user_profile_signed_in = true
 user_live_signed_in = false
 
 game_data_root = ""
+
+# Player/camera coordinate debug display (PASS 38). The HUD is a small
+# ImGui window (top-left) with the live player + camera x/y/z; F7 toggles
+# it in-game. The coord log appends timestamped lines at ~4 Hz to
+# <app root>/coord_dump/skate3_coords.log — tail -f from another terminal.
+# Both default OFF. The camera sample requires the native scene renderer
+# (it identifies the main render camera); the player sample comes from the
+# SkaterPresEntity world matrix and is independent of it.
+skate3_show_coords = false
+skate3_coord_log = false
+
+# OTS candidate capture (PASS 40). F11 appends one JSON line to
+# <app root>/OTS_candidates.json: the skater position (+ staleness flag),
+# the render camera, the world district (the guest's own streamed
+# DIST_<Name> chunk token) and the nearest anchored item the game tracks
+# around the skater. Armed by either flag (menu: Interface section);
+# note on Windows builds the F11 A/B parity diagnostics (capture_hotkeys)
+# shares the key — that tool is default-off.
+skate3_coord_capture = false

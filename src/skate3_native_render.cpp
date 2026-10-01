@@ -5,6 +5,7 @@
 #include "native/skate3_native_guest_read.h"
 #include "native/skate3_native_lw.h"
 #include "native/skate3_native_palette.h"
+#include "skate3_coord_dump.h"
 #include "skate3_native_scene.h"
 
 #include "generated/skate3_init.h"
@@ -504,6 +505,7 @@ extern "C" REX_FUNC(sub_82783038) {
   const uint32_t skater = ctx.r3.u32;
   const uint32_t index = ctx.r4.u32;
   __imp__sub_82783038(ctx, base);
+  skate3::coord_dump::OnSkaterEntity(base, skater);
   if (skate3::native_render::Enabled()) {
     skate3::native_entity::OnRopaDoubleBuffer(base, skater, index);
   }
@@ -526,6 +528,7 @@ extern "C" REX_FUNC(sub_82785778) {
   const uint32_t prev_owner =
       skate3::native_palette::ExchangePackOwner(ctx.r3.u32);
   __imp__sub_82785778(ctx, base);
+  skate3::coord_dump::OnSkaterEntity(base, ctx.r3.u32);
   skate3::native_palette::ExchangePackOwner(prev_owner);
 }
 

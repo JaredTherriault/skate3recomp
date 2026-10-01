@@ -243,6 +243,7 @@ set(SKATE3_COMMON_SOURCES
     src/exception_compat.cpp
     src/skate3_app_common.cpp
     src/skate3_demo_path.cpp
+    src/skate3_loc_dump.cpp
     src/skate3_draw_distance.cpp
     src/skate3_fov.cpp
     src/skate3_iso_installer.cpp

@@ -45,6 +45,7 @@
 // sources with DXC): the Vulkan RHI backend consumes these blobs; the D3D12
 // backend runtime-compiles the embedded HLSL as before.
 #include "native/shaders/spirv/skate3_native_shaders_spirv.h"
+#include "skate3_coord_dump.h"
 #include "skate3_native_scene_state.h"
 
 #if (defined(REX_HAS_D3D12) && REX_HAS_D3D12) || (defined(REX_HAS_VULKAN) && REX_HAS_VULKAN)
@@ -10451,6 +10452,12 @@ void BuildFrameScene(uint8_t* base, const SubmitRecord* records, size_t count) {
   g_scene = std::make_shared<const FrameScene>(std::move(scene));
 }
 
+// PASS 40: snapshot accessor for the OTS candidate capture.
+std::shared_ptr<const FrameScene> LastFrameScene() {
+  std::lock_guard<std::mutex> lock(g_scene_mutex);
+  return g_scene;
+}
+
 // StartRecording / WriteRecording: native/skate3_native_diagnostics.cpp.
 
 }  // namespace skate3::native_scene
@@ -10486,5 +10493,9 @@ extern "C" REX_FUNC(sub_82802A00) {
     ns::g_freecam_guest_rewrites.fetch_add(1, std::memory_order_relaxed);
   }
   __imp__sub_82802A00(ctx, base);
+  // PASS 38 coordinate debug: the main camera's consumed (possibly
+  // freecam-rewritten) view matrix. Internal-only tap; cvar-gated inside.
+  skate3::coord_dump::OnViewMatrix(
+      base, cam, mtx, cam == ns::g_sampler_viewcam.load(std::memory_order_relaxed));
 }
 

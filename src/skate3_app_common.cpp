@@ -2,6 +2,7 @@
 
 #include "skate3_demo_path.h"
 #include "skate3_fov.h"
+#include "skate3_coord_dump.h"
 #include "skate3_iso_installer.h"
 #include "skate3_native_render.h"
 #include "skate3_native_scene.h"
@@ -92,6 +93,15 @@ REXCVAR_DEFINE_STRING(skate3_dlc_root, "", "Skate 3",
                       "Directory containing Skate 3 DLC package files");
 REXCVAR_DEFINE_BOOL(skate3_auto_install_dlc, true, "Skate 3",
                     "Install DLC package files found in configured DLC folders");
+REXCVAR_DEFINE_BOOL(skate3_custom_bigs, false, "Skate 3",
+                    "Serve override base .big files (db/miscboot/missions) from "
+                    "skate3_custom_bigs_dir through VFS symlinks, without modifying the "
+                    "game tree. The challenge registration chain for Morshu's Paradise "
+                    "lives in these bigs (analysis/custom/morshus_paradise/).");
+REXCVAR_DEFINE_STRING(skate3_custom_bigs_dir, "", "Skate 3",
+                      "Directory holding the override big files "
+                      "(empty = <app root>/custom_bigs). Expected members: "
+                      "db_custom.big, miscboot_custom.big, missions_custom.big");
 REXCVAR_DEFINE_BOOL(skate3_ultrawide, false, "Skate 3",
                     "Ultrawide display support: the native renderer draws true widescreen "
                     "frames at the host display aspect (requires the native renderer; the "
@@ -677,6 +687,9 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
 }
 
 void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+  // PASS 38: the coordinate debug HUD (skate3_show_coords, F7 toggles;
+  // self-contained in skate3::coord_dump, cvar change-callback driven).
+  skate3::coord_dump::OnCreateDialogs(drawer);
   // Native/emulated corner readout (top right; off by default, cvar
   // skate3_native_render_mode_indicator shows it live). Input-transparent,
   // so it never affects cursor or focus handling.
@@ -768,6 +781,10 @@ void Skate3BaseApp::OnPostSetup() {
   if (std::getenv("SKATE3_DISABLE_BIG_ALIASES") == nullptr) {
     InstallBigDeviceAliases();
   }
+  // Custom base-big overrides: serve modified db/miscboot/missions bigs from a
+  // host directory via VFS symlinks (the game tree stays untouched). Must run
+  // before the guest opens the base bigs; the registration is one-shot at init.
+  InstallCustomBigOverrides();
   // Portable saves: a "saves" folder next to the executable takes over
   // saved-game content when it exists (launcher-managed installs). Layout is
   // flattened to saves/<xuid>/<save>; nothing is migrated from the user
@@ -1244,6 +1261,111 @@ void Skate3BaseApp::InstallBigDeviceAliases() {
   runtime()->file_system()->RegisterSymbolicLink(
       "dlcbig:", "\\Device\\Harddisk0\\Partition1");
   big_device_aliases_installed_ = true;
+}
+
+void Skate3BaseApp::InstallCustomBigOverrides() {
+  if (custom_bigs_installed_ || !runtime() || !runtime()->file_system()) {
+    return;
+  }
+  if (!REXCVAR_GET(skate3_custom_bigs)) {
+    return;
+  }
+
+  // The override bigs live in a host directory next to the executable (or the
+  // cvar dir). The guest never touches the game tree: every big open resolves
+  // through a VFS symlink to this device. Registering the symlinks for BOTH
+  // the raw partition path and the file-server scheme paths is required
+  // because the guest opens base bigs through several schemes ('d:\...',
+  // 'big:...', and the resolved '\Device\Harddisk0\Partition1\...' path).
+  // The symlink table matches by longest available prefix in an unspecified
+  // order, but every route converges: a generic-prefix hit rewrites the path
+  // into the partition form, which then matches the specific file symlink.
+  auto custom_root = std::string(REXCVAR_GET(skate3_custom_bigs_dir));
+  if (custom_root.empty()) {
+    custom_root = (rex::filesystem::GetAppRootFolder() / "custom_bigs").string();
+  }
+  const auto custom_dir = std::filesystem::path(custom_root);
+  if (!std::filesystem::is_directory(custom_dir)) {
+    REXLOG_WARN("Skate 3 custom bigs: directory not found, override disabled: {}",
+                custom_dir.string());
+    return;
+  }
+
+  struct OverrideMapping {
+    const char* guest_subpath;  // under the partition root, backslash form
+    const char* host_file;      // inside custom_dir
+  };
+  static constexpr OverrideMapping kMappings[] = {
+      {"data\\big\\db.big", "db_custom.big"},
+      {"data\\big\\miscboot.big", "miscboot_custom.big"},
+      {"data\\content\\missions.big", "missions_custom.big"},
+  };
+
+  // Thin wrapper so every resolution through the override device is visible:
+  // each resolve = one 'Skate 3 custom bigs: RESOLVE' line (the path, the
+  // found/missing result, and the host file the entry maps to).
+  class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
+   public:
+    LoggingOverrideDevice(const std::string_view mount_path,
+                          const std::filesystem::path& host_path)
+        : rex::filesystem::HostPathDevice(mount_path, host_path, false) {}
+    rex::filesystem::Entry* ResolvePath(
+        const std::string_view path) override {
+      auto* entry = rex::filesystem::HostPathDevice::ResolvePath(path);
+      REXLOG_INFO("Skate 3 custom bigs: RESOLVE '{}' -> {}",
+                  path, entry ? "FOUND" : "NOT-FOUND");
+      return entry;
+    }
+  };
+
+  auto device = std::make_unique<LoggingOverrideDevice>(
+      "skate3custombigs:", custom_dir);
+  if (!device->Initialize()) {
+    REXLOG_WARN("Skate 3 custom bigs: failed to initialize host device for {}",
+                custom_dir.string());
+    return;
+  }
+  runtime()->file_system()->RegisterDevice(std::move(device));
+
+  size_t installed = 0;
+  auto* fs = runtime()->file_system();
+  for (const auto& mapping : kMappings) {
+    const auto host_path = custom_dir / mapping.host_file;
+    if (!std::filesystem::exists(host_path)) {
+      REXLOG_WARN("Skate 3 custom bigs: {} not found, skipped", host_path.string());
+      continue;
+    }
+    const std::string target =
+        std::string("skate3custombigs:\\") + mapping.host_file;
+    const std::string guest_bs =
+        std::string("\\Device\\Harddisk0\\Partition1\\") + mapping.guest_subpath;
+    std::string d_scheme = std::string("d:\\") + mapping.guest_subpath;
+    std::string big_scheme = std::string("big:") + mapping.guest_subpath;
+    // Forward-slash variants of the same paths.
+    std::string guest_bs_fwd = guest_bs;
+    std::string d_scheme_fwd = d_scheme;
+    std::string big_scheme_fwd = big_scheme;
+    auto slashes = [](std::string& s) {
+      std::replace(s.begin(), s.end(), '\\', '/');
+    };
+    slashes(guest_bs_fwd);
+    slashes(d_scheme_fwd);
+    slashes(big_scheme_fwd);
+    fs->RegisterSymbolicLink(guest_bs, target);
+    fs->RegisterSymbolicLink(guest_bs_fwd, target);
+    fs->RegisterSymbolicLink(d_scheme, target);
+    fs->RegisterSymbolicLink(d_scheme_fwd, target);
+    fs->RegisterSymbolicLink(big_scheme, target);
+    fs->RegisterSymbolicLink(big_scheme_fwd, target);
+    ++installed;
+    REXLOG_INFO("Skate 3 custom bigs: {} -> {}", mapping.guest_subpath, target);
+  }
+
+  if (installed) {
+    custom_bigs_installed_ = true;
+    REXLOG_INFO("Installed Skate 3 custom big overrides ({} files) from {}", installed,
+                custom_dir.string());
+  }
 }
 
 void Skate3BaseApp::InstallDlcPackages() {

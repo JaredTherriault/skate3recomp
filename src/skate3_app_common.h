@@ -37,6 +37,7 @@ class Skate3BaseApp : public rex::ReXApp {
  private:
   void InstallRecipeOverlay();
   void InstallBigDeviceAliases();
+  void InstallCustomBigOverrides();
   void InstallDlcPackages();
   void ToggleSimpleSettings();
   void ToggleNativeDebug();
@@ -62,5 +63,6 @@ class Skate3BaseApp : public rex::ReXApp {
   std::unique_ptr<skate3::RenderModeIndicator> render_mode_indicator_;
   bool recipe_overlay_installed_ = false;
   bool big_device_aliases_installed_ = false;
+  bool custom_bigs_installed_ = false;
   std::atomic<uint32_t> debug_marker_count_{0};
 };

@@ -1739,3 +1739,7 @@ longjmp_address = 0x82F4FEB0
 "0x82F9B5E0" = { end = 0x82F9B5E4 }
 "0x82F9BD58" = { end = 0x82F9BD5C }
 "0x82F9BD60" = { end = 0x82F9BD64 }
+
+# Interior function boundary for the loc-DB swap fn (hookable via REX_FUNC /
+# __imp__ in src/skate3_loc_dump.cpp). Nothing references it elsewhere.
+"0x828E4A88" = { end = 0x828E4B50, parent = 0x828E4A78 }

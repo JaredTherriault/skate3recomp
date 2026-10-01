@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace skate3::native_scene {
@@ -694,6 +695,12 @@ bool ToggleSceneEnabled();
 // the render-mode indicator can show the degraded state even though the
 // renderer cvars are still enabled.
 bool SceneFailed();
+
+// The last published frame scene (host copy, shared_ptr snapshot — the
+// builder may replace it mid-press). Null before the first publish and
+// while the scene renderer is off. Used by the OTS candidate capture
+// (skate3::coord_dump) to probe the nearest rendered item to the skater.
+std::shared_ptr<const FrameScene> LastFrameScene();
 
 // Clears the sticky failure so the next frame retries the full pipeline
 // build (ToggleSceneEnabled calls this on re-enable: a transient allocation

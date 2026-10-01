@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <deque>
 #include <memory>
 #include <mutex>
