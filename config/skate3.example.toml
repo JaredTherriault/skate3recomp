@@ -103,3 +103,11 @@ skate3_coord_log = false
 # note on Windows builds the F11 A/B parity diagnostics (capture_hotkeys)
 # shares the key — that tool is default-off.
 skate3_coord_capture = false
+
+# Startup splash skip (PASS 47a): auto-complete the frontend movies (the
+# Skate/BlackBox logo splash between launch and the main menu) with no
+# button press. Every frontend movie auto-completes while this is on —
+# toggle off (F-console overlay or the settings toml) to watch attract
+# clips. Applies immediately, no restart. The press-to-skip
+# (skate3_intro_movie_skip, default on: A/Start = Space/Enter) still works.
+skate3_intro_movie_autoskip = false

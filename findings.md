@@ -586,3 +586,460 @@ The DLCDirectorySearch code = not statically traced (the cVaultManager
 vtable = runtime-filled; the codegen graph = the jump-table targets at
 0x8217xxxx). The module registration = the runtime-built list. The
 dlc<digits> root names = the guest's mount labels (the pass-32 closure).
+
+# PASS 42 (2026-10-01) — the five F11-captured OTS challenges (Snoop/Dre/Eazy-E/Cube/Warren)
+
+The user's build/OTS_candidates.json (6 captures, all district 'U') deduped
+to 5 sites; five new University OTS challenges authored onto the custom
+trio (ots_univ_16..20, BaseScore 600 / KilledItScore 1000 inline), the
+Morshu's Paradise pass-28..33 chain accumulated intact. New findings:
+
+1. THE PASS-30 DB SIZE-FIELD BUG (repaired): challengebanks main.bin/
+   main.vlt carried size fields 696/736 = len(NEW_BIN/NEW_VLT) — the NEW
+   BANK's sizes — instead of the edited main pair's decoded usize
+   (1,793,596+31 / 1,123,920+248 at the time). A loader that validates the
+   expected usize would REJECT the challengebank = a plausible
+   Morshu-never-appeared contributor. Fixed in the pass-42 rebuild
+   (1,793,782 / 1,125,408 with the new additions).
+2. THE PASS-30 LOC OFF BUG (repaired): the Morshu row (key AD1C2A6A)
+   carried off 0x1A338 → resolves to "Rippon Ribbon Ripper" under the
+   runtime-validated layout. Root cause = the pass-30 session wrote the
+   "plus" loc-DB ad hoc in /tmp (now wiped); the formula used there was
+   wrong. Correct = string_abs − (8+pool_off) = 0x67128.
+3. THE LOC-DB FORMAT (fully mapped, matches the src/skate3_loc_dump.cpp
+   runtime-validated layout): [u32 @0][inner=filesize−8 @4][count @8]
+   [stride 0x1C @0xC][pool_off @0x10: pool = 8+pool_off][8B name @0x14]
+   [count × (key u32 LE, off u32 LE) sorted @0x1C][8-byte bridge pair
+   (0xffd7e190, 0) between the table and the pool][strings: NUL-
+   terminated, off = string_abs − pool]. The bridge = easy to miss (a
+   rebuild that drops it lands 8 B short — caught by a length assert).
+4. THE FRAMEWORK-VAULT REJECTION: the own_the_spots group object
+   (challenge_local_data_framework.vlt export 8, mKey bf65ab4c87f0a118) =
+   a class-defaults attr list (44 entries, defaults 300/100, no child
+   refs); the official ots_univ_01..05 banks are NOT framework exports —
+   membership = the bank's mParent. The brief's "+1 ExpN row in the
+   framework vault" = inspected and rejected (no exemplar, invented
+   structure).
+5. IDEMPOTENT BUILDERS: an intermediate bad assembly corrupted
+   db_custom.big (the 10 new entries' payloads at wrong TOC offsets);
+   recovered (entries 0..1531 intact; the 10 payloads re-extracted
+   sequentially, validated), and all three pass-42 builders now carry
+   already-accumulated guards.
+6. Oracles all green (byte-exact originals vs the GAME TREE; decode STOP
+   + chunk walks; 600/1000 at the right attr keys; loc rows resolve;
+   game-tree mtime sweep = 0). The five rail runs overlap each other
+   (sites 20–46 m apart) — documented; no scaling invented.
+   User retest = boot with skate3_custom_bigs = true; the refreshed trio
+   is staged in build/custom_bigs/.
+
+# PASS 44 (2026-10-02) — the runtime→cSim transform SOLVED: IDENTITY; Morshu retargeted to The Wall's plaza
+
+## 1. THE GOLDEN-ANCHOR BINDINGS (loc-DB-proven, not presumed)
+The 4 golden F11 captures map to OFFICIAL University OTS missions by
+vlt32('ID_CHALLENGE_OTS_UNIV_NN_TITLE') lookups in the rebuilt master loc map
+(/tmp/opencode/xexre/base_loc_map_en.txt regenerated from the game-tree
+miscboot.big with the pass-42 layout; 13,606 rows):
+  ots_univ_01 'The Kink' / 02 'Stadium Bank' / 03 'Drainage Ditch' /
+  04 'Library Exit' / 05 'The Wall' / 10 'Megapark' / 11 'Twin Pools' /
+  12 'The Butt' / 13 'The Carvatron' / 14 'The Ditch'.
+  → The Wall = ots_univ_05 (the pass-29 "univ_14 = The Wall region"
+    presumption is OVERTURNED — univ_14 = 'The Ditch', the big multi-height
+    region at (-499..188, 86..279, -1029..-584)).
+
+## 2. THE TRANSFORM (verify_ots44_transform.py — reproducible)
+Evidence per anchor (1:1 coordinates):
+  The Wall capture INSIDE univ_05 volume_1 (x[100.5..125.3] y[51.5..66.5]
+  z[-100.3..-31.0]) + 3 more boxes; nearest marker 7.8 m.
+  Stadium Bank capture INSIDE univ_02 scoring/challenge boundary; nearest
+  marker 2.9 m.  Library Exit INSIDE univ_04 volume_1; 3.1 m.
+  Drainage Ditch INSIDE univ_03 volume_1 (the elevated spot, capture
+  y=133.15 vs box y[128.6..140.7] ✓); 3.6 m.
+Inter-anchor distance agreement (rigidity): 5 pairs agree to ≤2.5 m over
+250–614 m baselines; the Wall↔Stadium pair off by 7.8 m = the two standing
+offsets (7.8 + 2.9 m around the markers), not a transform.
+Formal fits (targets = nearest official markers):
+  Kabsch 7-DoF: scale 0.99826, yaw −0.38°, t ≈ (5.1, −4.9, −0.2),
+  residuals 1.2–4.2 m — the corrections absorb the user's standing offsets
+  (4 noisy correspondences, ~3–8 m standing scatter ⇒ 7 DoF is overfit);
+  rigid 6-DoF: residuals 1.4–4.4 m, t ≈ (4.8, −5.1, 0.4);
+  IDENTITY: residuals 7.8/2.9/3.1/3.6 m;
+  the 48 pure signed-axis permutations: IDENTITY perm (0,1,2) signs
+  (1,1,1) wins (mean|res| 2.15 m) — the axis-swap/mirror hypothesis from
+  the earlier passes is REFUTED.
+VERDICT: runtime skater space == mission cSim space (identity, within the
+~1% standing-offset noise). The pass-29/42 placements for the NWA five
+(authored AT the runtime coords) were ALREADY in the correct space; only
+Morshu's pass-29 site was wrong — it was placed 100+ m in the air above the
+'The Ditch' region (y 168–191 cSim = rooftop-level) because the clone was
+anchored to univ_14's volumes under the wrong name binding.
+
+## 3. THE RETARGET (build_ots44_morshu.py)
+Morshu (ots_univ_15, missions.big entry 5321) moved from the pass-42 site to
+the ORIGINAL intent — beside The Wall:
+  rails collective center (−245.07, ·, −880.315) → (72.0, ·, −65.7);
+  rails ymin 173.47 → 65.42 = the captured ground (64.92) + 0.5.
+  DELTA applied to the current dec = (317.07, −108.05, 814.615).
+  New boxes: challengeboundary [49.05,59.76,−111.46]..[100.81,83.02,−9.65];
+  scoringboundary [53.0,60.18,−105.46]..[96.95,79.93,−15.54];
+  volume_1 [65.72,65.42,−60.56]..[87.96,70.6,−29.68];
+  volume_2 [56.01,65.42,−101.73]..[70.92,70.6,−63.09];
+  volume_3 [67.11,65.42,−77.8]..[87.99,70.6,−60.62].
+  Choice documented: 12.5 m x-gap west of univ_05's volume_1 footprint, z
+  aligned with the spot's center line; the rails sit fully OUTSIDE univ_05's
+  challengeboundary x-min (92.3) too (rails x-max 88.0) — only Morshu's big
+  challengeboundary clips the official boundary by ~8 m (boundary-level
+  overlap only, the spot volumes are disjoint).
+  Node hashes/names/stamps UNTOUCHED (translation only) → the db layer's
+  bank .bin node refs stay valid → db_custom.big NOT rebuilt (md5 unchanged).
+
+## 4. VALIDATION
+* verify_ots44_transform.py: the fit + rigidity tables above (reproducible).
+* build_ots44_morshu.py: hard asserts — rails center (72.0, −65.7), ymin
+  65.42, x-clearance ≥12 m; 73 float rows + 16 locator transforms patched;
+  round-trip STOP.
+* verify_ots42.py: ALL ORACLES GREEN after the retarget (the NWA five's
+  boundary boxes re-verified at their runtime sites = unchanged by
+  identity).
+* Accumulation proof: the pass-42→44 missions_custom.big diff = EXACTLY
+  entry 5321's payload (876 bytes differ, all inside [0x3d97140..0x3d99c51];
+  header/TOC/names/other payloads = 0 diffs).
+* Restaged: build/custom_bigs/missions_custom.big md5 b07f5732… ==
+  the analysis copy; db/miscboot md5s unchanged from pass 42.
+* Game-tree mtime sweep = 0 (both verifiers).
+* One build incident, caught+fixed: the first rebuild wrote the EB size
+  field as the DECODED length (10,588) instead of the full payload length
+  (11,025 = 0x150 header + frame) → decode 'eof'; restored from the backup,
+  fixed the field, re-verified green.
+
+# PASS 45 (2026-10-01) — the vaultlist gate: the channel decided (Option B, the pack route) and the pack rebuilt from FRESH exemplars
+
+## 1. WHERE THE GLOB ACTUALLY LOOKS (run-053 + the wrapper code)
+`dlcbig:` = a wrapper-only symbolic link to `\Device\Harddisk0\Partition1`
+(skate3_app_common.cpp InstallBigDeviceAliases) — and the base tree has NO
+`data\db\` directory at all (only data/big/*.big archives). The run-053
+VAULTLIST-FOUND hits (dlc_play / dlc_maloof_money_cup / dlc_danny_way_park)
+therefore CANNOT come from the partition path: they are the OFFICIAL PACKS'
+inner .big entries (data\db\dlc_<pack>.vaultlist.xml enumerated across the
+mounted pack devices by the DLCDirectorySearch functor). Option A (serving
+the vaultlist through the overridden db.big) = structurally impossible;
+OPTION B (the drop-in STFS pack) = THE CHANNEL. The base-file override keeps
+carrying missions/miscboot/db exactly as in passes 35–44.
+
+## 2. THE FRESH EXEMPLARS (the pass-35 retraction answered properly)
+The 5 official LIVE containers = Skate3+DLC/DLC/<40-hex> (STFS). Extracted
+fresh with the validated stfs_parse.py:
+  E8CB… = dway_park_00000000.big (dannyway), D147… = presell_00000000.big.
+ALL pack .big entries are RAW (csize=0). The inner .big = the db-variant EB:
+hdr ver 3 / flags 0x50 / align 6 WITH the ctype column; name slots =
+[u16 BE folderIndex][NUL name]; folder slots = LEFT-aligned full paths;
+hash1 = djb2(folder_path + '/' + name) — verified on 5 exemplar entries
+(788/790/862/936/752). Folder 79 = data/db/challenge_local_data, 80 =
+data/db/challengebanks, 71 = data/fe/languages/english.
+Fresh bytes now in /tmp/opencode/ots42/fresh/ex/:
+  dlc_danny_way_park.vaultlist.xml (284 B, real XML, 4 VaultFile entries,
+    \r\n frame, 2 with subfolder backslash paths),
+  dlc_danny_way_park.vlt/.bin/.opt (Vers 4,784 / StrE 2,280 / EndC 16 — the
+    pack-loc vault = a LOCATION-MODULE bank: 24 exports defining danny's
+    park locations (.ems filter, model paths, map helpers) — NOT a loc-DB),
+  dlc_dwgh_local_data_framework (the pack framework, 25 exports),
+  challengebanks/progressionbanks dlc_dwgh (121,824/39,776 — the pack
+    challenge/progression banks),
+  dlc_dwgh_own_the_spots.vlt/.bin/.opt (1,312/200/16 = ONE
+    class-defaults own_the_spots group export — the pack per-challenge bank
+    shape; class 46a56addf284c381),
+  LANGUAGE_English_*.BIN (8,588 = a 190-key STRUCTURED loc-DB — the pack
+    STRING channel, confirming the pass-35 retraction's generic scan), and
+  presell's 276-B 3-key EN .BIN (the same loc-DB format; NOTE its bridge
+    = 8 bytes [0x34,0x3C), pool = 8+field).
+
+## 3. THE REBUILT PACK (build_ots45_pack.py + verify_ots45_pack.py)
+morshus_paradise (STFS, 143,360 B) carrying morshu_00000000.big
+(89,472 B, 100 raw entries, dway-faithful):
+  ./morshu0.ver ('667130:sk8build' — presell verbatim)
+  data/unlocks/morshu.unlock (the presell shape: ENTITLEMENTS/LOCATIONS/
+    CHALLENGES lines, 6 CHALLENGES rows — token exactness unproven)
+  data/db/dlc_morshu.vaultlist.xml — REAL XML, 6 VaultFile entries:
+    challenge_local_data\ots_univ_15..20.vlt (the six pairs; nothing listed
+    that doesn't exist)
+  data/db/challenge_local_data/ots_univ_15..20.{bin,vlt} — byte-identical
+    to the db_custom.big originals (idle clones); + .opt = 16-B EndC clones
+  data/fe/languages/english/LANGUAGE_English_morshu_skate3ng-dlc_morshu.BIN
+    — a 6-row loc-DB in the cracked format (name block 'morshu', 6 sorted
+    keys, all 6 names resolve)
+  data/content/missions/ots_univ_15..20/* — 78 entries (the CURRENT
+    mission payloads incl. the pass-44 Morshu retarget; SFIL-framed cSim)
+NOT provided (honest, documented): dlc_morshu.vlt/.bin (the
+location-module bank — a verbatim clone would double-register Danny's 24
+locations; a minimal vault = invented structure) and the pack challenge/
+progressionbanks vaults (danny-specific content; our six state objects
+already live in the overridden challengebanks/main.vlt via the pass-42
+surgery). The vaultlist lists ONLY the six per-challenge bank pairs.
+
+## 4. THE GATE MECHANICS TEST (user, run 054)
+Boot with the pack in build/dlc/ and grep the log:
+  'VAULTLIST-FOUND' with name='dlc_morshu.vaultlist.xml' → the glob sees us;
+  'VAULTLOAD-ATTACH' paths mentioning challenge_local_data\ots_univ_*
+  → the six banks queued.
+The stale pass-31/33-era pack + its installed copies were DELETED
+(build/dlc/morshus_paradise replaced; ~/.local/share/skate3/.../morshus_
+paradise + the .header removed in deployment) so nothing double-registers.
+
+## 5. ORACLES (verify_ots45_pack.py — ALL GREEN)
+  STFS re-parse: LIVE/read-only; 1 directory entry; hash-chain extract =
+  the inner .big byte-identical. Inner re-list: 100/100 hash1 = djb2(folder/
+  name), all raw. The vaultlist = valid XML, 6 entries, all present. The
+  .BIN: sorted 6 keys, 6/6 rows resolve. The pairs: byte-identical to the
+  db_custom entries (mKey/600/1000 verified in pass 42). The .opt shape.
+  Game-tree mtime sweep = 0; verify_ots42.py still ALL GREEN (the trio
+  untouched this pass).
+  Two build incidents, caught+fixed by the oracles en route: (a) the omitted
+  EB ctype column + a missing names-region pad → the guest's slot reader
+  would have read mid-name (dway's names_off = toc end + N + align, which
+  the builder now reproduces exactly); (b) the loc-DB bridge = 8 bytes (the
+  presell exemplar), not 4 — a 4-byte bridge shifts every string by 4
+  (~' Paradise' instead of "Morshu's Paradise").
+
+## 6. HONEST LIMITS
+  * The vaultlist FIND is the gate's proof; whether the loader then
+    REGISTERS the six challenges from the pack pairs (vs the base main.vlt
+    surgery) = the next run's evidence. If the pairs register, the pack
+    bank names (ots_univ_15..20) match the DepN/StrE convention authored in
+    passes 30/42.
+  * morshu.unlock's ENTITLEMENTS/LOCATIONS/CHALLENGES tokens =
+    exemplar-shaped; the presell tokens are the only ground truth.
+  * The 12 unread VAULTLIST-FOUND records from run 053 remain unimprovable
+    offline (a find-context layout variant); not required.
+
+# PASS 51 (2026-10-01) — the pass-50 fix deployed: the pack directory table 4-aligned to the dway exemplar
+
+The exemplar's exact conventions (raw-bytes probe on the FRESH extracted
+dway_park_00000000.big — the bigdir_diff.py carve path @0xc000 was a
+non-archive start; repointed):
+  * name slots = [u16 BE folderIndex][name][NUL pad]; fnLen = align4
+    (maxNameLen+2) — dway: 121+2 = 123 → 124.
+  * FOLDER SLOTS ARE 4-NUL-LED: [u32 0][path][pad] — the pass-45
+    "left-aligned" reading was wrong (the split(b'\0') parse returned b''
+    for slot 0 and pass 45 shipped the paths at offset 0).
+  * foLen = align4(maxPathLen+4); namesSize %4 == 0.
+Our pack pre-fix = fnLen 49 / foLen 35 (both odd) → a 4-stride guest
+directory reader misreads everything past slot 0 → the data/db directory
+view collapses → the vaultlist glob cannot produce dlc_morshu.
+The fix: fn_len 52 / fo_len 40 / 4-NUL-led folder slots / namesSize 5,640
+(%4=0); asset content untouched (100 entries, same bytes, hash1 =
+djb2(folder/name) 0/100 mismatches, names_size grew +320 B of padding).
+Oracles: the raw probe (strides %4=0, every folder slot 4-NUL-led, slots
+readable at their new strides), verify_ots45_pack.py ALL GREEN, bigdir_diff
+regenerated on the fresh exemplar = the two sides now differ only by
+per-size values with identical byte-pattern conventions, verify_ots42.py
+ALL GREEN, mtime sweep 0. Deployment: build/dlc/morshus_paradise replaced
+(md5 acd60afd…); no stale installed copies present. In-game proof = the
+user's next run (VAULTLIST-FOUND 'dlc_morshu').
+
+# PASS 59 (2026-10-02) — run-074's empty found-names VERDICT: instrumentation regression (the read code was dropped from the binary), not genuinely-empty records
+
+The user's first real in-game session to open the vaultlist-found window
+(build/logs/skate3_074.1.log, 13:10 UTC-7) opened the window cleanly and
+gave the best data yet — and then printed dir='' name='' head= on all 20
+found fires (#0..#19). Investigated, source-verified, fixed this pass:
+
+VERDICT (high confidence): the empty prints are an INSTRUMENTATION
+ARTIFACT. In the current sub_828D9378 hook body, dir/name/hex_head/
+hex_tail are DECLARED and PRINTED but never computed anywhere: the
+pass-53..58 hook rewrites dropped the pass-43b reads (dir @handle+0x14,
+name @handle+0x140, the 6-word head fallback) while keeping the print —
+`handle` is read from mgr+0x1450 and then never dereferenced, and a
+dead duplicate functor-read block sits where the record reads used to
+be. Runs 070-074 therefore carried ZERO probe data on record content
+(the name question has no sampler in those binaries). Every printed
+'identity' triple still matched the pass-53 canonical
+(functor=0x830e618c vtable=0x823178dc method8=0x8298e4e8) — reading the
+guest through the same pointers worked fine in the same fire, which
+corroborates the layout (not an unmapped window).
+
+Layout RE-VERIFIED at raw words this pass (tu3_disasm.sqlite):
+- caller sub_828D9378: lwz r31, 0x1450(r3) = handle; gate lbz r11,
+  8(r31); cmplwi 1 → the ==1 path does addi r3, r31, 8 (= handle+8),
+  addi r4, r1, 0x50, bl 0x82a884d0; the !=1 path destroys the string
+  object at handle+8 (0x82a88058 = {ptr,len} dtor) and invokes the
+  functor (bctrl r4 = the handle) then FindNext.
+- helper 0x82a884d0: dir copy source = r3+0xC (= handle+0x14); name
+  copy source = r3+0x138 (= handle+0x140); out = dir+name at r4
+  (r1+0x50). Identical to the pass-43b record — offsets confirmed.
+
+Run-074 session facts (the superset still stands):
+- The pack was seen: 'DLC package already installed: morshus_paradise';
+  ContentPackage root Content\6; morshu_00000000.big header (off 0x28
+  len=0x28) + names region (off 0x28 len=0x1cc8) read at 13:10:25.416
+  (t85757) — BEFORE the window opened at 13:10:25.446.
+- Window: 20 found fires, 128 REG-POP (boot burst), 107 WALK-SLOT,
+  3 VAULTLOAD-ATTACH all path='dlcbig:data\db' (dir only, NO filename
+  appended) the same as run-070 — the found-count grew 16 → 20 vs
+  run-060 (pre-stride-fix) while our names region now parses; the
+  20 vs 16 delta is suggestive that our subtree now READS but is NOT
+  decisive on its own (counts alone carry no names).
+- The 3 attaches without a filename remain ambiguous: either the
+  queued path is dir-only by design at that stage (the name attaches
+  later per-row) or the name field was empty at queue time; the
+  restored name reads settle it on the next run.
+
+INSTRUMENT CHANGE (the one targeted change this pass):
+src/skate3_loc_dump.cpp sub_828D9378 hook restored to the pass-43b
+record reads (plus the pass-58 identity print kept, its dead duplicate
+functor block removed): dir @handle+0x14 and name @handle+0x140 as
+SEH-guarded strings, 6-word head fallback @handle, 8-word tail fallback
+@handle+0x130; NEW: when a name is non-empty the line is promoted to
+INFO ('Skate 3 pass59: VAULTLIST-FOUND #N dir= name= tail=') so the
+decisive data is visible at ANY log level, not just DEBUG.
+
+NEXT-RUN DECISION TABLE (unchanged in shape, now actually decidable):
+- names printed = dlc_play/dlc_maloof/dlc_danny_way(×2) + 12 empty,
+  NO dlc_morshu → branch (a1): our find-context never created in the
+  install/loc-load chain → the pass-34 wrapper-side registration shim
+  is the codegen.
+- dlc_morshu.vaultlist.xml present among the names → branch (a2):
+  created and yielded → the question moves to the per-row yield /
+  record naming (fix-2's builder lane).
+- If names stay empty alongside garbage head hex → the handle layout
+  our probe used moved (post-rewrite); the head bytes name the record.
+
+Files: src/skate3_loc_dump.cpp (sub_828D9378 only), this file,
+decode_reconstruction.md (PASS 59), STATUS_PASS59.txt. Build ninja
+link-clean; binary relinked; game tree untouched (mtime sweep 0).
+
+# PASS 61 (2026-10-02) — the pack's inner big carries a conforming FAT region (the fatSize=0 fix deployed)
+
+BASIS (pass 60, verified): our pack inner big morshu_00000000.big carried
+fatSize=0 — the missing FAT node/directory index. The guest's pack-big mount
+parser reads the index window [0x28, names_end+fatSize]; officials carry
+fatSize>0 and the FAT = the directory tree the walk consumes.
+
+PINNED THIS PASS (mechanical, no re-derivation — verified by byte-exact
+roundtrip of THREE exemplars: presell 34 nodes, dway 1160, play 1228):
+the FAT region = [u32 nodesLen][rows of 5 u32][u32 tblLen][tbl ids]
+[u32 stringsLen][strings][zero pad], all big-endian. Node row =
+[key = string offset][flag 0=dir 1=file][parent id][X][Y]:
+file rows X = global file ordinal (emission order), Y = 0xFFFFFFFF;
+dir rows X = child count, Y = offset of the dir's child list inside tbl.
+Emission order = folder-table slot order (walk each path creating NEW dir
+rows; name appended to the strings blob at first emission, repeats REUSE the
+first offset — dway proves it: 'stream' x2, 'static' x3,
+'danny_way_vert.abin' x2); a folder's files emit right after its path walk
+sorted by strcmp(name) ascending (dway missions F15's 21 '[0x..].._Sim_NNN
+.loc' files prove a byte sort; djb2-asc would scramble them).  tbl = root's
+children reversed, then every other dir's children reversed, dirs in
+creation order.  Y(dir) = running sum of child counts (verified at dway's
++108/+24/+48 steps).  fatSize = align16(structural total) — the zero pad
+sits INSIDE the fat region (observed pads: presell +0, dway +9, play +3).
+The folder-table region = zeros buffer with each slot's path written
+UNBOUNDED at slot_base+4 (both exemplars show the original builder's paths
+overflowing 1-4 bytes into the next slot's prefix area).  Our builder keeps
+clean padded slots (pass-51-conforming) — verified against the
+exemplar-shaped parser only.
+
+TWO MORE VIOLATIONS FOUND AND SHIPPED:
+1. The officials store the TOC STRICTLY hash1-ascending (verified on presell
+   AND dway). Ours was unsorted → build now mirrors the rule (hash1 =
+   djb2(fullpath)).
+2. hash1 of the root-level '.ver' file = djb2(BARE name), no folder prefix
+   (dwayprk0.ver matched exactly; presell0.ver hash1 0xc16df287 ==
+   djb2('presell0.ver')). Ours was djb2('./...') → fixed.
+
+SHIPPED: build_ots45_pack.py emits the FAT for the morshu hierarchy
+(1 root + 15 dirs + 100 entries; root children = 'data' dir + morshu0.ver —
+the exemplar shape), header fatSize = 0x12D0, payload offsets shifted one
+64-block; no payload bytes changed. Rebuilt + STFS rewrapped (151552 B,
+blocks 25) + redeployed build/dlc/morshus_paradise; stale installed copy
+~/.local/share/skate3/0000000000000000/454108E6/00000002/morshus_paradise
+(+ its header) deleted. Oracle: all verify_ots45_pack.py oracles PASS
+(STFS re-extract byte-identical; hash1 100/100; TOC ascending; FAT
+conformance + roundtrip byte-identical; vaultlist XML; loc-DB rows; pair
+payloads). verify_ots42.py rerun: ALL ORACLES GREEN (trio untouched).
+Game tree mtime sweep 0. NO headless game launches.
+
+USER RUBRIC (unchanged): grep 'pass59: VAULTLIST-FOUND' for
+dlc_morshu.vaultlist.xml; then check the University challenge map for
+Morshu's Paradise / Snoop / Dre / Eazy-E / Cube / Warren.
+
+Files: build_ots45_pack.py, verify_ots45_pack.py, fatbuild.py +
+roundtrip.py (the pinned evidence, copied into the lane), STATUS_PASS61.txt,
+findings.md, decode_reconstruction.md. Game tree untouched.
+
+files (STACK2 name = Walking Downloads / STACK2 low / STEAM name). The
+pair-table module: PAIR predicates {key, val} (INIT = all {-1, 0}), the
+count/word INIT = -1, and the CLEAR = sub_8290C7D0's final row write
+{key -1, val 0} (not {-1,-1}; the pass-66/67 sheet's inverse-vs-not-1
+report = an "OFFICIAL bank LAUNCH scan caught the count-word" note — the
+INSERTION semantics carry the stale-word as LOGGED, not hand-minute).
+
+# PASS 69 (2026-10-04) — the walker's PAIR-TABLE module = FULLY DECODED (init/append/attach/remove) + the wrapper shim deployed (cvar-gated default OFF)
+
+BASIS (live disasm re-derivation, anchored on the ENTRY record layout =
+{word0, word1 [0x83084110]-snapshot, word2 key, word3 0} per the pass-67/68A
+fresh-body + arg-word rows): the pair-table words = the pass-67 slots (all
+14 binary accesses re-pin the SAME addresses: count [0x82FDE294], pairs
+[0x830684F4], gate [0x8306DCA4]); the LAYOUT/semantics half now CLOSES:
+pairs stride 8 {key, val}, ENTRY stride 0x10 word2 = the key, the INIT =
+sub_8290BEB8 (ENTRY 0x640 B + pairs 0x320 B via the registry sub-object
+m3; pairs all {-1, 0}; count = −1; base-id [0x83084110] = 2; the global
+"en" case-bool register not the DEP-name). APPEND = sub_8290C548 (gate +
+count+1 = 0x64; key = max+1; ENTRY at the first word1==0 slot; m3
+(slot+0xC, key*0x1C) = the loc-DB setup); REGISTER/ATTACH = sub_8290C2A8
+(signed find over the pairs + byte-swap rec words 0/1) then
+sub_8290D638(rec, val) — rec[0](BE) == 0x00039000 (the loc-DB image magic)
+→ the DEP copy into the val-keyed [8+i*0x1C] loc-DB row (row word2 =
+pair_val, word3 = rec[0] (.BIG pool ptr), word4 = rec (image ptr), DEP
+word0 (used-count)++), else ret 0 (the 0x82AB8C40 name-compare — the EAString
+arg, not a DEP-table byte). REMOVE = sub_8290C6C8 + the drain sub_8290C7D0
+(all pairs {-1, 0} = the clear state).
+
+**THE WALKER-GATE PASS-68A EXCLUSION (statically resolved): the walkers'
+rec arg = NOT the [0x830CFEEC]+8 vault-table rows** (the callers drive the
+sub_82D083D8 dispatch layer's arg — the caller-side keyed dispatch), and
+the DEP-NAME-BASED registration CANNOT REACH the walker's rec-scan — the
+pass-65/68 FIX-C byte-conformance shutdown of the pass-68A rubric does NOT
+apply to this lane. **THE CAUSE: the walkers' caller keys the dispatch —
+the wrapper-side shim (the ENTRY-walk variant below) bypasses the callers'
+key contract entirely.**
+
+**THE SHIM (shipped this pass):**
+- src/skate3_loc_dump.cpp: `Skate3RegisterCustomPackShim` at the
+  sub_8290C2A8 hook entry (cvar `skate3_register_custom_packs`, default
+  FALSE = harmless when off; kHotReload), and the plain-C
+  `sub_8290C2A8_guest_dispatch(rec, entry)` guest-side (private guest
+  stack r1 = 0x80000000 via __imp__sub_8290D638 — the real pair-table
+  append path's second half). The gate-pin trace line at the sub_8290C2A8
+  hook entry (the RAW byteswapped r3 per fire, first 8 + every 4096th)
+  replaces the pass-67 INIT comment; this IS the unchanged visible
+  trail (no new call sites).
+- src/sub_8290C2A8_shim.cpp (the C++ shim binary; SEH-guarded guest reads
+  everywhere via GuestTryCopy; no std::string guest reads; atomics only):
+  the ENTRY walk (stride 0x10 off [0x8306DCA4]]) → (a) the officials'
+  still-visible window (WAIT, not run) vs (b) the killed-tail key (the
+  walk window CLOSED → the shim window); the hard pre-dispatch guard =
+  the rec's live read BEFORE the patch: rec[0] (BE) MUST be the loc-DB
+  image magic 0x00039000 — else the dispatch CANNOT succeed and the shim
+  CLEARS the one-shot flag (the try-retries on a later fire).
+- Patched: ENTRY.key = the tail key, DEP.key = ENTRY, DEP.used-count = 1.
+  Dispatched: sub_8290C2A8_guest_dispatch(rec, ENTRY) = the registry
+  key = the tail key (the walker's caller-side key contract BYPASSED —
+  the point of the shim).
+
+AGENTS-PANNE (per session, the shim nodes): one-shot fires per session on
+the first trigger (the self-CHECK is atomic exchange; the try-retries use
+the same session state); the cap = the walk's own registers (the
+0x8290c80c/C7D0-style tree walks do NOT hand-rec-scan the pair table —
+the pair-table module owns it). THE NEGATIVE-CONTROL GUARANTEE: cvar off
+= the shim binary's bail-once, no-op path (default harmless; the
+pass-63/68 console behavior unchanged). The shim is conditional on the
+found-record's shape (the rec pre-check) = a no-op on the officials'
+records (the walker drives those itself, keyed the SAME as the pass-63/68
+baseline — no additional registrations).
+
+FILES: src/skate3_loc_dump.cpp (shim entry + guest dispatch + gate-pin
+trace), src/sub_8290C2A8_shim.cpp (new, the C++ shim), CMakeLists.txt
+(the shim source added), build/skate3 (relit with both), Analysis PASS-69
+statuses + this decode append. Game tree = NO CHANGE (mtime sweep = 0).
+
+VERIFICATION: ninja clean + idempotent re-run (0 errors both runs) +
+nm skate3 shows the shim symbol linked. Strays: none. Game tree: no new
+mtimes beyond the title_update staging known-unchanged. All timestamps UTC.

@@ -48,6 +48,12 @@ REXCVAR_DEFINE_INT32(skate3_demo_path_input_delay_ms, 600, "Skate 3",
 REXCVAR_DEFINE_BOOL(skate3_intro_movie_skip, true, "Skate 3",
                     "Skip the frontend intro movie when A or Start is pressed "
                     "(the default keyboard bindings make that Space and Enter)");
+REXCVAR_DEFINE_BOOL(skate3_intro_movie_autoskip, false, "Skate 3",
+                    "Automatically complete frontend movies (the startup "
+                    "Skate/BlackBox logo splash) with no button press. Every "
+                    "frontend movie auto-completes while this is on (toggle "
+                    "off to watch attract clips). Applies immediately, no "
+                    "restart.");
 
 namespace skate3::demo_path {
 namespace {
@@ -409,6 +415,21 @@ void SetUiInputProvider(std::function<rex::input::InputSystem*()> provider) {
 }
 
 bool ShouldForceIntroMovieComplete() {
+  // PASS 47a: the auto-skip — every frontend movie auto-completes while the
+  // cvar is on (the accepted force path: the FEMoviePlayer::Update patch
+  // reports not-playing and the FE flow advances immediately). This is the
+  // same mechanism as the press-to-skip below, just unconditioned; the FE
+  // flow itself (language select, save prompts, press-start) never routes
+  // through the movie player, so those screens are untouched.
+  if (REXCVAR_GET(skate3_intro_movie_autoskip)) {
+    bool logged = g_logged_intro_movie_skip.load(std::memory_order_relaxed);
+    if (!logged &&
+        g_logged_intro_movie_skip.compare_exchange_strong(
+            logged, true, std::memory_order_relaxed)) {
+      REXLOG_INFO("Skate 3 demo path: intro movie auto-skip active");
+    }
+    return true;
+  }
   if (AutomationEnabled() && g_skip_intro_movie.load(std::memory_order_relaxed)) {
     bool expected = false;
     if (g_logged_intro_movie_skip.compare_exchange_strong(expected, true,

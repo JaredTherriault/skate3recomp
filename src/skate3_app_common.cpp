@@ -20,6 +20,7 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include "../third_party/rexglue-sdk/thirdparty/tomlplusplus/vendor/json.hpp"
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -938,11 +939,103 @@ void Skate3BaseApp::ToggleSimpleSettings() {
     }
     return pad;
   };
+
+  auto load_mods = [this]() -> std::vector<rex::ui::SimpleModInfo> {
+    std::vector<rex::ui::SimpleModInfo> result;
+    const auto app_root = rex::filesystem::GetAppRootFolder();
+    auto packs_dir = app_root / "custom_packs";
+    if (!std::filesystem::is_directory(packs_dir)) {
+      packs_dir = app_root.parent_path() / "custom_packs";
+    }
+    if (!std::filesystem::is_directory(packs_dir)) {
+      return result;
+    }
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(packs_dir, ec)) {
+      if (!entry.is_directory()) continue;
+      const std::string folder_name = entry.path().filename().string();
+      const bool is_disabled_folder =
+          folder_name.ends_with(".disabled") || folder_name.ends_with(".off") ||
+          folder_name.ends_with(".bak") || folder_name.ends_with(".tmp");
+      const auto manifest_path = entry.path() / "pack.json";
+      if (!std::filesystem::exists(manifest_path)) continue;
+      try {
+        std::ifstream f(manifest_path);
+        if (!f.is_open()) continue;
+        auto j = nlohmann::json::parse(f, nullptr, false);
+        if (j.is_discarded() || !j.is_object()) continue;
+        rex::ui::SimpleModInfo info;
+        info.id = j.value("id", entry.path().stem().string());
+        info.name = j.value("name", info.id);
+        info.description = j.value("description", "Custom challenge mod.");
+        info.version = j.value("version", "1.0.0");
+        const bool manifest_enabled = j.value("enabled", true);
+        info.enabled = manifest_enabled && !is_disabled_folder;
+        result.push_back(std::move(info));
+      } catch (...) {
+      }
+    }
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+      return a.name < b.name;
+    });
+    return result;
+  };
+
+  auto save_mods = [this](const std::vector<rex::ui::SimpleModInfo>& mods) {
+    const auto app_root = rex::filesystem::GetAppRootFolder();
+    auto packs_dir = app_root / "custom_packs";
+    if (!std::filesystem::is_directory(packs_dir)) {
+      packs_dir = app_root.parent_path() / "custom_packs";
+    }
+    if (!std::filesystem::is_directory(packs_dir)) {
+      return;
+    }
+    for (const auto& mod : mods) {
+      std::error_code ec;
+      for (const auto& entry : std::filesystem::directory_iterator(packs_dir, ec)) {
+        if (!entry.is_directory()) continue;
+        auto manifest_path = entry.path() / "pack.json";
+        if (!std::filesystem::exists(manifest_path)) continue;
+        try {
+          nlohmann::json j;
+          {
+            std::ifstream f(manifest_path);
+            j = nlohmann::json::parse(f, nullptr, false);
+          }
+          if (j.is_discarded() || !j.is_object()) continue;
+          const std::string current_id = j.value("id", entry.path().stem().string());
+          if (current_id == mod.id) {
+            j["enabled"] = mod.enabled;
+            auto current_path = entry.path();
+            if (mod.enabled && (current_path.filename().string().ends_with(".disabled") ||
+                                current_path.filename().string().ends_with(".off"))) {
+              std::string clean = current_path.filename().string();
+              if (clean.ends_with(".disabled")) clean.resize(clean.size() - 9);
+              else if (clean.ends_with(".off")) clean.resize(clean.size() - 4);
+              auto target_path = current_path.parent_path() / clean;
+              std::error_code ren_ec;
+              std::filesystem::rename(current_path, target_path, ren_ec);
+              if (!ren_ec) {
+                current_path = target_path;
+                manifest_path = current_path / "pack.json";
+              }
+            }
+            std::ofstream out(manifest_path);
+            out << j.dump(2) << std::endl;
+            REXLOG_INFO("Skate 3 mods: updated '{}' ({}) enabled = {}", mod.name, mod.id, mod.enabled);
+            break;
+          }
+        } catch (...) {
+        }
+      }
+    }
+  };
+
   simple_settings_dialog_ =
       std::make_unique<rex::ui::SimpleSettingsDialog>(
           imgui_drawer(), user_settings_path_, std::move(load_profiles), std::move(save_profile),
           std::move(close_settings), std::move(close_game), std::move(restart_game),
-          std::move(poll_gamepad));
+          std::move(poll_gamepad), std::move(load_mods), std::move(save_mods));
   ApplySettingsCursorMode();
   skate3::native_scene::SetSettingsMenuBlur(true);
   simple_settings_dialog_->Show();
@@ -1285,6 +1378,37 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     custom_root = (rex::filesystem::GetAppRootFolder() / "custom_bigs").string();
   }
   const auto custom_dir = std::filesystem::path(custom_root);
+  std::error_code dir_ec;
+  std::filesystem::create_directories(custom_dir, dir_ec);
+
+  // Modular Challenge Packs: if custom_packs directory exists, sync them via tools/pack_compositor.py
+  const auto app_root = rex::filesystem::GetAppRootFolder();
+  std::filesystem::path packs_dir = app_root / "custom_packs";
+  if (!std::filesystem::is_directory(packs_dir)) {
+    packs_dir = app_root.parent_path() / "custom_packs";
+  }
+  std::filesystem::path compositor_script = app_root.parent_path() / "tools" / "pack_compositor.py";
+  if (!std::filesystem::exists(compositor_script)) {
+    compositor_script = app_root / "tools" / "pack_compositor.py";
+  }
+
+  const bool has_packs_dir = std::filesystem::is_directory(packs_dir);
+  if (has_packs_dir && std::filesystem::exists(compositor_script)) {
+    const std::string sync_cmd = "python3 '" + compositor_script.string() + "' --packs-dir '" +
+                                 packs_dir.string() + "' --out-dir '" + custom_dir.string() + "'";
+    REXLOG_INFO("Skate 3 custom packs: checking active packs in {}...", packs_dir.string());
+    const int status = std::system(sync_cmd.c_str());
+    if (status != 0) {
+      REXLOG_WARN("Skate 3 custom packs: compositor sync returned status {}", status);
+    }
+  }
+
+  // If modular custom packs are in use, only mount overrides when at least one pack is active.
+  if (has_packs_dir && !std::filesystem::exists(custom_dir / ".active")) {
+    REXLOG_INFO("Skate 3 custom packs: no active challenge packs, using stock retail data");
+    return;
+  }
+
   if (!std::filesystem::is_directory(custom_dir)) {
     REXLOG_WARN("Skate 3 custom bigs: directory not found, override disabled: {}",
                 custom_dir.string());
@@ -1299,6 +1423,11 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
       {"data\\big\\db.big", "db_custom.big"},
       {"data\\big\\miscboot.big", "miscboot_custom.big"},
       {"data\\content\\missions.big", "missions_custom.big"},
+      // Custom OTS map pins: University global locators with a reused
+      // challenge locator moved to the custom spot (analysis/custom/ots_v2).
+      {"data\\content\\global_locators\\BAM\\DIST_University\\"
+       "DIST_Univers_[0x0f7a42a9282864ac].rx2",
+       "global_locators_univ.rx2"},
   };
 
   // Thin wrapper so every resolution through the override device is visible:

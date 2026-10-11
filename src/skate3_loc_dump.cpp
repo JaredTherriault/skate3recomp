@@ -100,6 +100,14 @@ REXCVAR_DEFINE_BOOL(skate3_loc_dump, false, "Skate 3",
                     "language load to <app root>/loc_dump/");
 REXCVAR_DEFINE_STRING(skate3_loc_dump_dir, "", "Skate 3",
                       "Optional dump directory override (absolute path)");
+// PASS 69: the per-pack-loc-vault REGISTRATION shim, default OFF (harmless
+// when off = the negative-control contract). With it on, each hook entry
+// tries (once per session, guest-side) the key-independent
+// register + ATTACH path (sub_8290C2A8 ENTRY-walk → dispatcher
+// sub_8290D638) so OUR pack's loc-DB rows register like the officials'.
+REXCVAR_DEFINE_BOOL(skate3_register_custom_packs, false, "Skate 3",
+                    "Pass-69 shim: register custom DLC packs' loc-DBs "
+                    "key-independently (once per session, guest-side).");
 
 namespace skate3::loc_dump {
 namespace {
@@ -111,7 +119,7 @@ namespace {
 // patched_file_path + skate3_tu_functions.toml), so the TU3 runtime-image
 // addresses ARE the generated function keys (nm-verified sub_8290C2A8).
 constexpr uint32_t kSkate3ImageBase = 0x82000000;
-constexpr size_t kMaxLanguageImage = 0x20000;  // 128KB: the largest observed = 10,308 B.
+constexpr size_t kMaxLanguageImage = 0x100000;  // 1 MB: run-073 measured the base English Global loc-DB at 531,155 B — the old 0x20000 window skipped it.
 
 // The guest buffer's own header drives the size: [u32 LE magic][u32 LE usize
 // = filesize-8][...]. So the image size = usize + 8 and the usize = the bytes
@@ -224,6 +232,32 @@ void DumpLocDb(const uint8_t* p, size_t max_len, uint32_t guest_addr) {
 }  // namespace
 }  // namespace skate3::loc_dump
 
+// The PASS 69 shim entry (defined in sub_8290C2A8_shim.cpp):
+// the cvar-gated, key-independent per-pack-loc-vault REGISTRATION + ATTACH.
+namespace skate3::loc_dump {
+void Skate3RegisterCustomPackShim(uint32_t rec_guest);
+}  // namespace skate3::loc_dump
+
+extern "C" void sub_8290C2A8_guest_dispatch(uint32_t rec, uint32_t entry);
+
+extern "C" void sub_8290C2A8_guest_dispatch(uint32_t rec, uint32_t entry) {
+  // A private guest stack (r1) far from any live guest frame; the guest
+  // dispatcher's body (sub_8290D638) runs via its __imp__ form (no C++ ABI
+  // exposure, reentrant-safe: the shim sees only the FIRE trail of the
+  // guest's own walkers).
+  PPCContext ctx{};
+  ctx.r1.u32 = 0x80000000;
+  ctx.r3.u32 = rec;
+  ctx.r4.u32 = entry;
+  uint8_t* base = skate3::native_scene::g_guest_base.load(
+      std::memory_order_relaxed);
+  if (!base) {
+    REXLOG_WARN("Skate 3 pass69: guest dispatch: no guest base");
+    return;
+  }
+  __imp__sub_8290D638(ctx, base);
+}
+
 // The loc-DB image register fn: sub_8290C2A8(r3 = the loaded loc-DB image,
 // r4 = the pack's loc handle). The image = the decrypted LANGUAGE_*.BIN stream
 // for the pack vault OR the per-language set (the pack-loc loader's two archive
@@ -247,20 +281,45 @@ void DumpLocDb(const uint8_t* p, size_t max_len, uint32_t guest_addr) {
 // line in any skate3_*.log, cvar on). Verified against the TU3 runtime image
 // (rexglue dump-xex) + tu3_disasm.sqlite; see analysis/xex PASS 27.
 extern "C" REX_FUNC(sub_8290C2A8) {
-  // Fire-trace: proves whether the override is invoked at all. Logs the first
-  // 8 invocations, then every 4096th (guest boot may call other images before
-  // language load; without this we can't distinguish "never fires" from
-  // "fires but skips").
+  // PASS 69 (SHIM): the gate-pin trace — one INFO line per fire with the
+  // RAW byteswapped r3 argument. The pass-68A arbitration showed ENTRY
+  // count=7 with NO morshu-named capture: either our .vlt's +0x10 key word
+  // never reaches the walkers' registry match, or the walker-side
+  // key-independent shim path (added this pass) is what carries us. This
+  // line names every recorded argument so the next run's grep decides.
   static std::atomic<uint64_t> fire_count{0};
   const uint64_t n = fire_count.fetch_add(1, std::memory_order_relaxed);
   if (n < 8 || (n & 0xFFF) == 0) {
-    REXLOG_INFO("Skate 3 loc dump: hook fired #{} r3={:#x}", n,
-                ctx.r3.u32);
+    REXLOG_INFO("Skate 3 loc dump: hook fired #{} r3={:#x} r4={:#x}", n,
+                ctx.r3.u32, ctx.r4.u32);
   }
   // Pure observation (no register/state mutation). Safe to run unconditionally
   // when the cvar is on; the cvar is checked inside, so flipping it per-session
   // gates the capture. Zero cost when the cvar is off (a single 32-bit read).
   const uint32_t guest_addr = ctx.r3.u32;
+  // PASS 67 (FIX-A): the ENTRY trace, trigger 1 — the first 32 fires (was 8),
+  // each stamped with a brief argument hex: the loc-DB image head's first
+  // 8 bytes (BE words: magic + usize). Read PRE-__imp__ because the caller
+  // may recycle the buffer after the callee runs. Honest failure markers,
+  // never guessed values.
+  if (n < 32 && guest_addr >= 0x1000000 && guest_addr < 0x90000000) {
+    if (uint8_t* gbase = skate3::native_scene::g_guest_base.load(
+            std::memory_order_relaxed)) {
+      uint32_t w0 = 0, w1 = 0;
+      const bool ok0 = skate3::native_scene::GuestTryCopy(&w0, gbase + guest_addr, 4);
+      const bool ok1 = skate3::native_scene::GuestTryCopy(&w1, gbase + guest_addr + 4, 4);
+      if (ok0 && ok1) {
+        REXLOG_INFO("Skate 3 pass67: ENTRY #{} arg={:#x} head={:08X} {:08X}",
+                    n, guest_addr, __builtin_bswap32(w0), __builtin_bswap32(w1));
+      } else {
+        REXLOG_INFO("Skate 3 pass67: ENTRY #{} arg={:#x} head=read=FAIL",
+                    n, guest_addr);
+      }
+    } else {
+      REXLOG_INFO("Skate 3 pass67: ENTRY #{} arg={:#x} head=NO_GUEST_BASE",
+                  n, guest_addr);
+    }
+  }
   if (REXCVAR_GET(skate3_loc_dump) && guest_addr >= 0x1000000 &&
       guest_addr < 0x90000000) {
     // Guest addresses here are RUNTIME pointers into guest RAM (the loc-DB is
@@ -277,6 +336,45 @@ extern "C" REX_FUNC(sub_8290C2A8) {
                                   skate3::loc_dump::kMaxLanguageImage,
                                   guest_addr);
     }
+  }
+  // =========================================================================
+  // PASS 69 (SHIM, skate3_register_custom_packs, default OFF): the
+  // key-independent per-pack-loc-vault REGISTRATION + ATTACH path.
+  //
+  // Static shape (this pass's full decode, recorded in
+  // decode_reconstruction.md PASS 69): sub_8290C2A8 = find(rec-key, r4-key)
+  // over the stride-8 pair table + the record's words 0/1 byte-swap +
+  // dispatch sub_8290D638(rec, pair_val). The dispatcher's guards:
+  //   (1) rec[0] (BE) == 0x00039000 = the loc-DB image magic,
+  //   (2) r4 = a registry ENTRY: ENTRY[+8] = the pair-table key,
+  //       ENTRY[+0x18] = the first DEP record of the key's [8+i*0x1C]
+  //       loc-DB row, DEP[+4] = its key-count,
+  // and its body: DEP.word2 = the row key @+0x10, DEP.word3 = rec[0]
+  // (the .BIG pool ptr), DEP.word4 = rec, DEP.word0 = used-count++.
+  //
+  // THE GATE-PIN: the walkers call sub_8290C2A8 with the key INDEPENDENT
+  // of the record bytes — a byte-conformant pack .vlt/.BIN is NOT required
+  // for the registration+ATTACH to succeed. So the shim:
+  //   1. rec = the record this fire carries (BE r3, saved pre-__imp__);
+  //   2. ENTRY-WALK: scan the ENTRY array ([0x8306DCA4], stride 0x10,
+  //      INIT = 100 slots) for the slot whose word2 (its pair-table key)
+  //      is STILL VISIBLE in the pair table ([0x830684F4] rows, stride 8,
+  //      count [0x82FDE294] ≥ 0; a {key,0} row = the killed tail slot) —
+  //      the officials' registrations happen per walk and stay visible
+  //      within it; a killed-tail hit = the window (and the table) closed.
+  //      No slot qualifies = no-op (honest miss).
+  //   3. patch ENTRY+8 = the table's tail key (kill marker's row),
+  //      DEP+0xC = ENTRY, DEP+4 = 1;
+  //   4. call the GUEST dispatcher via the plain-C shim
+  //      sub_8290C2A8_guest_dispatch(r3 = rec, r4 = ENTRY) = __imp__
+  //      sub_8290D638 (the real pair-table append path's second half —
+  //      the ATTACH; no C++ ABI exposure, reentrant-safe: the shim sees
+  //      only the FIRE trail of the guest's own walkers).
+  // The pass-67/68A hooks, rates and the capture guard stay untouched;
+  // this block is cvar-gated and reads guest memory SEH-guarded only.
+  if (REXCVAR_GET(skate3_register_custom_packs) &&
+      guest_addr >= 0x1000000 && guest_addr < 0x90000000) {
+    skate3::loc_dump::Skate3RegisterCustomPackShim(guest_addr);
   }
   __imp__sub_8290C2A8(ctx, base);
 }
@@ -298,6 +396,616 @@ extern "C" REX_FUNC(sub_82D083D8) {
                 n, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32);
   }
   __imp__sub_82D083D8(ctx, base);
+  // PASS 58 registration-window probe: fires exactly when the pack-loc
+  // loader chain is active (each sub_82D083D8 fire brackets the
+  // 8290C548 alloc + the 8290C2A8 register for ONE module; VAULT-LOADER
+  // fire #1 = the game-load module loop). Sampled AFTER the body so the
+  // just-registered context reads back. Decides pass-34 branch (a1)
+  // empirically: an '8290C548 returned' line WITHOUT an '8290C2A8'
+  // line = the alloc-only path taken (the module never registered);
+  // an '8290C2A8' line per module = the register side live per module.
+  if (REXCVAR_GET(skate3_loc_dump)) {
+    uint8_t* gbase = skate3::native_scene::g_guest_base.load(
+        std::memory_order_relaxed);
+    if (gbase) {
+      uint32_t raw = 0, gidx = 0, cnt = 0, last = 0;
+      if (skate3::native_scene::GuestTryCopy(&raw, gbase + 0x830C2288, 4)) {
+        gidx = __builtin_bswap32(raw);
+      }
+      if (skate3::native_scene::GuestTryCopy(&raw, gbase + 0x830BE4F4, 4)) {
+        cnt = __builtin_bswap32(raw);
+      }
+      if (cnt != 0 && skate3::native_scene::GuestTryCopy(
+                          &raw, gbase + 0x830BEE40 + (cnt - 1) * 8, 4)) {
+        last = __builtin_bswap32(raw);
+      }
+      REXLOG_INFO("Skate 3 pass58: REG-WINDOW #{} gidx={:#x} "
+                  "alloc_count={} last_slot={:#x}",
+                  n, gidx, cnt, last);
+    }
+  }
+}
+
+// ===========================================================================
+// PASS 43 (hooks) / PASS 43b (find-context layout corrected): the
+// challenge-list / vault-register chain fire-trace.
+//
+// Chain mapped from the TU3 disasm:
+//   sub_826DAB98  = the DLCDirectorySearch DRIVER: mgr ([r3]) +0x1450 =
+//     the search handle (a find-context object), +0x1458 = the search
+//     functor (virtual call, bctrl, with the debug tag
+//     'cVaultManager::DLCDirectorySearch'), per found file calls
+//     sub_828D9378, then FindNextFile 0x8298f430 + FindClose 0x8298fff8.
+//   sub_828D9378  = the per-file VAULTLIST PROCESSOR. PASS 43b layout
+//     correction (run-048 dumped the glob spec + garbage, not names —
+//     handle+8 was the wrong offset): the find-context is a
+//     WIN32_FIND_DATA-like record the guest's string helper 0x82a884d0
+//     concatenates:
+//       handle+0x14  = the search DIRECTORY string ('...dlcbig:data\db\'),
+//       handle+0x140 = the CURRENT MATCH NAME (the found file!),
+//     and the dir+name output goes to the caller's r1+0x50 buffer.
+//   sub_8247F9E8  = the load-callback STRING-ATTACH setter (obj{ptr,len}
+//     <- r4 string, disasm-verified): fires per queued vault load WITH
+//     the full path — the cleanest submit-side trace (which exact paths
+//     the game turns into vault loads).
+//   sub_828D9510  = the cVaultBinLoadCallback-side creator (HOT ~120/s
+//     even at menu — not chain-discriminative, kept for parity).
+// Everything read-only, SEH-guarded via GuestTryCopy, cvar skate3_loc_dump.
+//
+// PASS 43b: hex-dump fallbacks added (bounded, SEH-guarded) so the next
+// run prints the found names even if a layout guess misses again.
+namespace {
+
+// SEH-guarded hex dump: appends up to `words` BE u32s at addr into out.
+void HexDumpWords(uint8_t* gbase, uint32_t addr, int words, std::string* out) {
+  char buf[16];
+  for (int i = 0; i < words; ++i) {
+    uint32_t raw = 0;
+    if (!skate3::native_scene::GuestTryCopy(&raw, gbase + addr + i * 4, 4)) {
+      out->append("...");
+      return;  // unreadable: honest truncation
+    }
+    raw = __builtin_bswap32(raw);
+    std::snprintf(buf, sizeof(buf), "%08X", raw);
+    out->append(buf);
+    if (i + 1 < words) out->append(" ");
+  }
+}
+
+// ===========================================================================
+// PASS 69 (the PAIR-TABLE slots fully re-derived from tu3_disasm.sqlite —
+// supersedes the pass-67 comment block below, whose word ADDRESSES all
+// re-verify; the LAYOUT/semantics half now closes):
+//   count word [0x82FDE294]: s32; -1 = empty; per-APPEND = max_key+1.
+//     All 14 binary accesses pin to it; 0x82FE9294 (the old suspect) = ZERO.
+//   pairs word [0x830684F4]: pointer to the PAIR rows, stride 8 =
+//     {key s32, val s32} (INIT fills key=-1, val=0; find/append/removal all
+//     stride 8; 0x830684E4/-0x10 variants = ZERO accesses — the pass-67
+//     "stride 0x10" comment half was wrong).
+//   gate  word [0x8306DCA4]: pointer to the ENTRY rows, stride 0x10 =
+//     {word0 in-use, word1 [0x83084110]-snapshot, word2 key, word3 0}.
+//     (INIT allocs 100×0x10 = 0x640 B + 100×8 = 0x320 B pairs via the
+//     registry sub-object's virtual m3, count=-1, [0x83084110]=2.)
+//   CHAIN: INIT sub_8290BEB8 (per-mount, from 0x82D08090; the only caller)
+//     → WALKER sub_82D083D8 (per module): PAIRFIND-APPEND = sub_8290C548
+//     (gate≠0 + count+1<0x64; key = max+1; ENTRY at first slot+4==0;
+//     dispatch m3(slot+0xC, ENTRY_key*0x1C) = the loc-DB setup fn)
+//     → REGISTER/ATTACH = sub_8290C2A8 (signed find over the stride-8
+//     pairs; byte-swaps the record's words 0/1; then dispatcher
+//     sub_8290D638(rec, pair_val): rec[0]==0x00039000 (the loc-DB magic,
+//     NOT a DEP table) → DEP copy into the key's [8+idx*0x1C] loc-DB row,
+//     DEP.word2 = the row key @+0x10, DEP.word3 = the .BIG pool ptr,
+//     DEP.word4 = the loc-DB image ptr, DEP word0 = used-count++)
+//     → TEARDOWN sub_82D08ED0 → REMOVE = sub_8290C6C8 (find + shift +
+//     count-- + freed pair = {-1, 0}) → sub_8290C7D0 = full clear.
+//   The walkers (0x82D0854C key match / 0x82D089DC queue drain) call
+//     sub_8290C2A8 with the key INDEPENDENT of the record bytes →
+//     byte-conformant pack .vlt/.BIN content is NOT required for the
+//     registration+ATTACH to succeed → the wrapper-side shim below.
+//   Semantics: rec word1 = the name-key (word0 = the .BIG pool ptr), and
+//     r4 @sub_82D083D8+0x2C = the registry handle whose vtable+8 the
+//     walkers call per found file (the pass-53 functor triple's site).
+// All reads SEH-guarded (GuestTryCopy); one-shot per session, fired once
+// the pass59 found-record burst has progressed (its 16th+ fire) or ~2 s
+// of no new found lines elapse, whichever first. The dump is read-only
+// observation; the SHIM (registration) lives in the sub_8290C2A8 hook
+// above, cvar-gated (skate3_register_custom_packs, default OFF).
+void DumpPairTable(uint64_t at_fire) {
+  uint8_t* gbase = skate3::native_scene::g_guest_base.load(
+      std::memory_order_relaxed);
+  if (!gbase) {
+    REXLOG_WARN("Skate 3 pass67: pair-table dump: no guest base yet");
+    return;
+  }
+  uint32_t raw = 0, count = 0, rows = 0, clone = 0;
+  if (skate3::native_scene::GuestTryCopy(&raw, gbase + 0x82FDE294, 4)) {
+    count = __builtin_bswap32(raw);
+  }
+  if (skate3::native_scene::GuestTryCopy(&raw, gbase + 0x830684F4, 4)) {
+    rows = __builtin_bswap32(raw);
+  }
+  if (skate3::native_scene::GuestTryCopy(&raw, gbase + 0x8306DCA4, 4)) {
+    clone = __builtin_bswap32(raw);
+  }
+  REXLOG_INFO("Skate 3 pass67: PAIRTABLE #fire={} count={:#x} rows={:#x} "
+              "clone={:#x}", at_fire, count, rows, clone);
+  if (rows != 0) {
+    std::string row0, last10, last8;
+    HexDumpWords(gbase, rows, 4, &row0);
+    REXLOG_INFO("Skate 3 pass67: PAIRTABLE row0={}", row0);
+    if (count >= 1 && count < 100) {
+      // stride-0x10 reading (the fresh-body row-obj layout): the last row's
+      // first 8 words cover the row itself + its neighbor.
+      HexDumpWords(gbase, rows + (count - 1) * 0x10, 8, &last10);
+      REXLOG_INFO("Skate 3 pass67: PAIRTABLE lastrow@ret*10 ={}", last10);
+      // stride-8 reading (the max-scan / dedup cmp stride): the same slot's
+      // word pair, cross-check for the offline FIX-B dep-pair derivation.
+      HexDumpWords(gbase, rows + (count - 1) * 8, 4, &last8);
+      REXLOG_INFO("Skate 3 pass67: PAIRTABLE lastrow@ret*8 ={}", last8);
+    }
+  }
+}
+
+// PASS 67: the one-shot dump gate — both triggers (the 16th found line and
+// the 2 s silence fallback) funnel through one flag so the dump runs once.
+std::atomic<bool> g_pair_dump_done{false};
+std::atomic<int64_t> g_found_first_ns{0};  // steady_clock ns of the first found line
+
+void MaybeDumpPairTable(uint64_t at_fire) {
+  if (g_pair_dump_done.exchange(true, std::memory_order_relaxed) == false) {
+    DumpPairTable(at_fire);
+  }
+}
+
+int64_t SteadyNsNow() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+}  // namespace
+
+extern "C" REX_FUNC(sub_826DAB98) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 8 || (n & 0xFF) == 0)) {
+    const uint32_t mgr = ctx.r3.u32;
+    std::string hex;
+    std::string method;
+    if (uint8_t* gbase =
+            skate3::native_scene::g_guest_base.load(std::memory_order_relaxed)) {
+      HexDumpWords(gbase, mgr + 0x1450, 4, &hex);
+      // PASS 46: capture the FUNCTOR's search method: mgr+0x1458 -> functor
+      // object; [functor] = vtable; vtable+8 = the method that drives the
+      // candidate enumeration (the pass-43b wait loop's process target).
+      // Its VA printed here = the static hook target for the next pass
+      // (verified codegen-entry before use).
+      uint32_t functor = 0, raw = 0;
+      const char* f_note = "";
+      if (!skate3::native_scene::GuestTryCopy(&raw, gbase + mgr + 0x1458, 4)) {
+        f_note = " functor-read=FAIL";
+      } else {
+        functor = __builtin_bswap32(raw);
+        uint32_t vtable = 0;
+        if (!skate3::native_scene::GuestTryCopy(&raw, gbase + functor, 4)) {
+          f_note = " vtable-read=FAIL";
+        } else {
+          vtable = __builtin_bswap32(raw);
+          uint32_t slot8 = 0;
+          if (!skate3::native_scene::GuestTryCopy(&raw, gbase + vtable + 8, 4)) {
+            f_note = " method8-read=FAIL";
+          } else {
+            slot8 = __builtin_bswap32(raw);
+            if (slot8 != 0) {
+              method = fmt::format("functor={:#x} vtable={:#x} method8={:#x}",
+                                   functor, vtable, slot8);
+            }
+          }
+        }
+      }
+      if (!method.empty()) method += f_note;
+      else if (f_note[0] != 0) method = f_note + 1;
+    }
+    REXLOG_INFO("Skate 3 pass46: SEARCH-DRIVER #{} mgr={:#x} mgr1450..={} {}",
+                n, mgr, hex, method);
+  }
+  __imp__sub_826DAB98(ctx, base);
+}
+
+extern "C" REX_FUNC(sub_828D9378) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  // PASS 58: the per-fire identity print is DEBUG-only now (at INFO it
+  // printed 2 lines per record in 070/071 — a duplicate of the same
+  // functor/vtable/method8 triple); the bracket stays at INFO.
+  if (n == 0) {
+    REXLOG_INFO("Skate 3 pass58: VAULTLIST-FOUND window OPEN (per-fire "
+                "identity + name reads at DEBUG)");
+  }
+  if (REXCVAR_GET(skate3_loc_dump)) {
+    const uint32_t mgr = ctx.r3.u32;
+    std::string dir, name, hex_head, hex_tail;
+    uint32_t handle = 0, functor53 = 0, vtable53 = 0, slot8_53 = 0;
+    if (uint8_t* gbase =
+            skate3::native_scene::g_guest_base.load(std::memory_order_relaxed)) {
+      uint32_t raw = 0;
+      if (skate3::native_scene::GuestTryCopy(&raw, gbase + mgr + 0x1450, 4)) {
+        handle = __builtin_bswap32(raw);
+      }
+      // PASS 53: capture the functor chain while the records are live.
+      if (skate3::native_scene::GuestTryCopy(&raw, gbase + mgr + 0x1458, 4)) {
+        functor53 = __builtin_bswap32(raw);
+      }
+      if (functor53 != 0 && skate3::native_scene::GuestTryCopy(
+                                &raw, gbase + functor53, 4)) {
+        vtable53 = __builtin_bswap32(raw);
+      }
+      if (vtable53 != 0 && skate3::native_scene::GuestTryCopy(
+                                &raw, gbase + vtable53 + 8, 4)) {
+        slot8_53 = __builtin_bswap32(raw);
+      }
+      // PASS 59 RESTORE (the pass-43b record reads): the pass-56/58 hook
+      // rewrites dropped these reads — dir/name/hex_head were declared but
+      // never filled, so every fire printed dir='' name='' head= (runs
+      // 070-074) while the records were live and readable (the identity
+      // chain read through fine in the same session). Restore:
+      //   dir  @handle+0x14   = the search directory spec
+      //   name @handle+0x140  = the CURRENT MATCH filename
+      //   head fallback       = 6 words @handle (raw bytes even when the
+      //                         string reads fail)
+      if (handle != 0) {
+        char buf[128] = {};
+        if (skate3::native_scene::GuestTryCopy(buf, gbase + handle + 0x14,
+                                               sizeof(buf) - 1)) {
+          dir = buf;
+        }
+        std::memset(buf, 0, sizeof(buf));
+        if (skate3::native_scene::GuestTryCopy(buf, gbase + handle + 0x140,
+                                               sizeof(buf) - 1)) {
+          name = buf;
+        }
+        HexDumpWords(gbase, handle, 6, &hex_head);
+      }
+    }
+    if (n < 16) {
+      REXLOG_DEBUG("Skate 3 pass58: VAULTLIST-FOUND #{} identity: "
+                   "functor={:#x} vtable={:#x} method8={:#x}",
+                   n, functor53, vtable53, slot8_53);
+    }
+    // PASS 58: the per-fire name read moved to DEBUG (log_level=debug in
+    // skate3.toml to see it; INFO runs stay quiet — this hook fires per
+    // found file in a hot loop and the identity pair above already
+    // carries the walk state at INFO).
+    REXLOG_DEBUG(
+        "Skate 3 pass58: VAULTLIST-FOUND #{} mgr={:#x} dir='{}' name='{}' "
+        "head={}", n, mgr, dir, name, hex_head);
+    // PASS 59: the found NAME is the decisive record — promote it to INFO
+    // (visible at any log level) when non-empty so no run loses it to a
+    // DEBUG filter; plus the bounded tail fallback (8 words @handle+0x130).
+    if (!name.empty()) {
+      if (uint8_t* gbase = skate3::native_scene::g_guest_base.load(
+              std::memory_order_relaxed)) {
+        HexDumpWords(gbase, handle + 0x130, 8, &hex_tail);
+      }
+      REXLOG_INFO("Skate 3 pass59: VAULTLIST-FOUND #{} dir='{}' name='{}' "
+                  "tail={}", n, dir, name, hex_tail);
+    }
+    // PASS 67 (FIX-A): the pair-table live dump, one-shot per session —
+    // trigger 1: at the 16th+ found line (the burst completed ~1.5 s in
+    // run-081, so the 16th fire sits just after the window closes and the
+    // dump correlates with the pass59 timestamps by construction).
+    // Trigger 2 (the timed fallback): MaybeDumpPairTable is also armed from
+    // the hot VAULTBIN-CB site below, firing on ~2 s of no new found
+    // lines, so a shorter burst still dumps exactly once. Both funnel
+    // through g_pair_dump_done.
+    {
+      int64_t expected = 0;
+      g_found_first_ns.compare_exchange_strong(expected, SteadyNsNow(),
+                                               std::memory_order_relaxed);
+    }
+    if (n >= 16) {
+      MaybeDumpPairTable(n);
+    }
+  }
+  __imp__sub_828D9378(ctx, base);
+}
+
+extern "C" REX_FUNC(sub_8247F9E8) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 16 || (n & 0xFF) == 0)) {
+    const uint32_t obj = ctx.r3.u32;
+    const uint32_t path = ctx.r4.u32;
+    std::string s;
+    uint8_t* gbase = path != 0 ? skate3::native_scene::g_guest_base.load(
+                                     std::memory_order_relaxed)
+                               : nullptr;
+    if (gbase) {
+      char buf[128] = {};
+      if (skate3::native_scene::GuestTryCopy(buf, gbase + path,
+                                             sizeof(buf) - 1)) {
+        s = buf;
+      }
+    }
+    REXLOG_INFO("Skate 3 pass43: VAULTLOAD-ATTACH #{} obj={:#x} path='{}'",
+                n, obj, s);
+  }
+  __imp__sub_8247F9E8(ctx, base);
+}
+
+// ===========================================================================
+// PASS 46: the ENUMERATION-SOURCE trace. Pass-43b mapped the record shape
+// (find record: +0x14 dir spec, +0x140 match name) but the SOURCE of the
+// candidates was still open. This pass, static mapping of the find-context
+// creator and the cVaultManager ctor:
+//   sub_828AAE90(size, device_key, tag, flags) = the find-context CREATOR:
+//     it walks a global list ([glob]-style, stride 0x6c entries), indexes
+//     it by the device_key arg (mulli r10, r29(arg2), 0x6c — arg2 = the
+//     per-search DEVICE KEY/INDEX), and the entry's vtable+8 method
+//     builds the find record. The (device_key, tag) pair per search =
+//     THE enumeration-source answer.
+//   sub_828D8B58(mgr?, dev, functor, flags) = the manager REGISTER
+//     (stores r4->+0x1454, r5->+0x1458 = the functor, r6->+0x145c,
+//     zeroes +0x1450 = the current find record, clears the atomic at
+//     +0x1460) — its single caller sub_826D65A4 passes the functor
+//     created by 0x828AAE90 with the device key [global 0x830C621C].
+// Hooks: dump r3/r4/r5 (+ the tag string read for r5/r4-string form),
+// cvar-gated, SEH-guarded.
+extern "C" REX_FUNC(sub_828AAE90) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 16 || (n & 0xFF) == 0)) {
+    const uint32_t size = ctx.r3.u32;
+    const uint32_t key = ctx.r4.u32;
+    const uint32_t tag = ctx.r5.u32;
+    std::string s;
+    uint8_t* gbase = (tag >= 0x80000000 && (tag & 3) == 0)
+                         ? skate3::native_scene::g_guest_base.load(
+                               std::memory_order_relaxed)
+                         : nullptr;
+    if (gbase) {
+      char buf[64] = {};
+      if (skate3::native_scene::GuestTryCopy(buf, gbase + tag,
+                                             sizeof(buf) - 1)) {
+        s = buf;
+      }
+    }
+    REXLOG_INFO("Skate 3 pass46: FIND-CREATE #{} size={:#x} key={:#x} tag='{}'",
+                n, size, key, s);
+  }
+  __imp__sub_828AAE90(ctx, base);
+}
+
+// PASS 54: the 0x6C-stride registry instrumentation.
+// sub_8298E020 = the WALK'S per-slot iterator (pass-53: the walk method8
+// 0x8298E4E8 tail-branches here). Args per its disasm: r3 = the pool base,
+// r4 = the DEVICE INDEX (slot selector into [pool+0xC1B4] + idx*0x6C),
+// r5 = a rule object, r6 = search flag bits, r7/r8 = buffers. It resolves
+// the slot record then hands the entry's sub-object to sub_8298E2E8.
+// This hook prints the resolved slot's identity words (SEH-guarded: the
+// sub-object pointers at slot+0x30/+0x34 and the record head 8 words)
+// so one boot shows the per-device REGISTRY contents — our pack's slot
+// (index unknown) vs the official slots side by side.
+extern "C" REX_FUNC(sub_8298E020) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 32 || (n & 0x3FF) == 0)) {
+    const uint32_t pool = ctx.r3.u32;
+    const uint32_t idx = ctx.r4.u32;
+    std::string head, sub;
+    if (uint8_t* gbase =
+            skate3::native_scene::g_guest_base.load(std::memory_order_relaxed)) {
+      uint32_t raw = 0, table = 0, slot = 0;
+      if (skate3::native_scene::GuestTryCopy(
+              &raw, gbase + pool + 0xC1B4, 4)) {
+        table = __builtin_bswap32(raw);
+      }
+      if (table != 0) {
+        slot = table + idx * 0x6C;
+        HexDumpWords(gbase, slot, 8, &head);
+        uint32_t subo0 = 0;
+        if (skate3::native_scene::GuestTryCopy(
+                &raw, gbase + slot + 0x30, 4)) {
+          subo0 = __builtin_bswap32(raw);
+        }
+        uint32_t subo1 = 0;
+        if (skate3::native_scene::GuestTryCopy(
+                &raw, gbase + slot + 0x34, 4)) {
+          subo1 = __builtin_bswap32(raw);
+        }
+        sub = fmt::format(" sub30={:#x} sub34={:#x}", subo0, subo1);
+      }
+    }
+    REXLOG_INFO(
+        "Skate 3 pass54: WALK-SLOT #{} pool={:#x} idx={} slot..={}{}",
+        n, pool, idx, head, sub);
+  }
+  __imp__sub_8298E020(ctx, base);
+}
+
+// PASS 56: REG-POP — the registration-site hook at sub_8298DE78 (the
+// find-context/population writer per pass-54's static close-out; single
+// caller sub_8298D97C). Static-arg decode from the callee's disasm:
+//   r28(arg1?) = the pool self; r30 = a device/lk pointer (arg2, used as
+//   r24 = addis r4,1 -0x290 with -0x15bc deref for the slot count);
+//   r31(arg3) = the register record: [r31+0] and +4 = entry sub-objects
+//   (r29/r27 stored at slot+0x30/+0x34 via r27... it reconstructs:
+//     lwz r29, 0(r31); lwz r27, 4(r31); lwz r26, 0x14(r31); lwz r25, 0x18(r31)
+//   then record stores at slot+0x30..+0x38), [r31+8] and [r31+0xc...] =
+//   counts, [r31+0x10] = length, [r31+0x14]/[r31+0x18] = a ptr+len pair.
+// This hook prints all of it per fire (before the store), one line per
+// REGISTRATION event; the pack's find-context creations arrive here in
+// a boot independent of the walk variance.
+extern "C" REX_FUNC(sub_8298DE78) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 64 || (n & 0xFF) == 0)) {
+    const uint32_t pool_self = ctx.r3.u32;
+    const uint32_t dev = ctx.r4.u32;
+    const uint32_t rec = ctx.r5.u32;
+    uint32_t e0 = 0, e1 = 0, cnt8 = 0, cntc = 0, len10 = 0, p14 = 0, l18 = 0;
+    uint32_t raw = 0;
+    std::string p14s;
+    if (uint8_t* gbase =
+            skate3::native_scene::g_guest_base.load(std::memory_order_relaxed)) {
+      auto rd = [&](uint32_t addr, uint32_t* out) {
+        uint32_t r = 0;
+        if (skate3::native_scene::GuestTryCopy(&r, gbase + addr, 4)) {
+          *out = __builtin_bswap32(r);
+        }
+      };
+      if (rec != 0) {
+        rd(rec + 0, &e0);
+        rd(rec + 4, &e1);
+        rd(rec + 8, &cnt8);
+        rd(rec + 0xc, &cntc);
+        rd(rec + 0x10, &len10);
+        rd(rec + 0x14, &p14);
+        rd(rec + 0x18, &l18);
+        if (p14 != 0 && l18 != 0 && l18 < 128) {
+          char buf[128] = {};
+          if (skate3::native_scene::GuestTryCopy(buf, gbase + p14,
+                                                 sizeof(buf) - 1)) {
+            p14s = buf;
+          }
+        }
+      }
+    }
+    REXLOG_INFO(
+        "Skate 3 pass56: REG-POP #{} self={:#x} dev={:#x} rec={:#x} "
+        "e0={:#x} e1={:#x} c8={:#x} cc={:#x} len={:#x} p14={:#x} l18={:#x} "
+        "str='{}'", n, pool_self, dev, rec, e0, e1, cnt8, cntc, len10, p14,
+        l18, p14s);
+  }
+  __imp__sub_8298DE78(ctx, base);
+  // PASS 56b: post-call sample — ctx.r3 = the constructed find-context
+  // (the registered slot's identity!). One line per registration with
+  // the produced object; its vtable says WHICH kind of find context got
+  // built (the official packs' vs ours).
+  {
+    static std::atomic<uint64_t> post{0};
+    const uint64_t m = post.fetch_add(1, std::memory_order_relaxed);
+    if (REXCVAR_GET(skate3_loc_dump) && (m < 64 || (m & 0xFF) == 0)) {
+      const uint32_t made = ctx.r3.u32;
+      std::string vinfo;
+      if (uint8_t* gbase = skate3::native_scene::g_guest_base.load(
+              std::memory_order_relaxed)) {
+        uint32_t raw = 0, vt = 0, m08 = 0;
+        if (skate3::native_scene::GuestTryCopy(&raw, gbase + made, 4)) {
+          vt = __builtin_bswap32(raw);
+        }
+        if (vt != 0 && skate3::native_scene::GuestTryCopy(
+                           &raw, gbase + vt + 8, 4)) {
+          m08 = __builtin_bswap32(raw);
+        }
+        vinfo = fmt::format(" made={:#x} vtbl={:#x} m08={:#x}", made, vt, m08);
+      }
+      REXLOG_INFO("Skate 3 pass56: REG-POP-MADE #{}{}", m, vinfo);
+    }
+  }
+}
+
+extern "C" REX_FUNC(sub_828D8B58) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 8 || (n & 0xFF) == 0)) {
+    const uint32_t a3 = ctx.r3.u32;
+    const uint32_t dev = ctx.r4.u32;
+    const uint32_t functor = ctx.r5.u32;
+    std::string hex;
+    if (uint8_t* gbase =
+            skate3::native_scene::g_guest_base.load(std::memory_order_relaxed)) {
+      HexDumpWords(gbase, functor, 4, &hex);
+    }
+    REXLOG_INFO(
+        "Skate 3 pass46: MGR-REGISTER #{} mgr={:#x} dev={:#x} functor={:#x} "
+        "functor..={}", n, a3, dev, functor, hex);
+  }
+  __imp__sub_828D8B58(ctx, base);
+}
+
+extern "C" REX_FUNC(sub_828D9510) {
+  // PASS 67 (FIX-A): the pair-table dump's timed fallback — trigger 2.
+  // This site sweeps ~120/s even at the menu, so ~2 s after the first
+  // VAULTLIST-FOUND line the dump fires exactly once even when the found
+  // burst ended before its 16th fire. Gated on the same
+  // g_pair_dump_done flag; two atomic loads when idle.
+  if (REXCVAR_GET(skate3_loc_dump) && !g_pair_dump_done.load(
+          std::memory_order_relaxed)) {
+    const int64_t t0 = g_found_first_ns.load(std::memory_order_relaxed);
+    if (t0 != 0 && SteadyNsNow() - t0 > int64_t(2) * 1000 * 1000 * 1000) {
+      static std::atomic<uint64_t> cb_fallback_count{0};
+      const uint64_t m = cb_fallback_count.fetch_add(1,
+                                                     std::memory_order_relaxed);
+      MaybeDumpPairTable(m);
+    }
+  }
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+  if (REXCVAR_GET(skate3_loc_dump) && (n < 16 || (n & 0x3FF) == 0)) {
+    REXLOG_INFO("Skate 3 pass43: VAULTBIN-CB fired #{} r3={:#x} r4={:#x}",
+                n, ctx.r3.u32, ctx.r4.u32);
+  }
+  __imp__sub_828D9510(ctx, base);
+}
+
+// ===========================================================================
+// PASS 67 (FIX-A): the PAIR-TABLE FIND exit hook at sub_8290C548.
+// Statically decoded this pass (tu3_disasm.sqlite, raw-word): the callee =
+// the pair-table's grow/find primitive —
+//   the count word [0x82FDE294] with the cap count+1 >= 0x64 (bail =
+//   return -1 at 0x8290C6BC);
+//   the first-empty walk over the deref'd pairs base [0x82FE84F4]
+//   (stride-0x10 rows; the row-obj identity per the fresh-body decode =
+//   {count, ptr 0x830F092C@4, fn 0x82E50D30@8, 0@0xC});
+//   the match = the linear stride-8 cmp against the compared key.
+// Hook contract: __imp__ FIRST (the callee writes its own r3), then
+// sample ctx.r3 = the RETURN (the row-obj idx, or 0xFFFFFFFF on any bail).
+// DECISIVE per the pass-66 plan: a −1 printed while our row object passes
+// through = the membership gate PROVEN (→ FIX-B); an idx ≥ 0 whose
+// register-fn triple shows the parse-fail exit = the parse gate (→
+// FIX-C). Read-only, rate-capped (first 64 fires, then every 256th),
+// UTC-stamped by the logging sink (skate3_loc_dump-gated, kHotReload).
+// ===========================================================================
+// PASS 67 (FIX-A): the PAIR-TABLE FIND exit hook at sub_8290C548.
+// Statically decoded (tu3_disasm.sqlite, raw-word): the callee =
+// the pair-table's grow/find primitive —
+//   the count word [0x82FDE294] with the cap count+1 >= 0x64 (bail =
+//   return -1 at 0x8290C6BC);
+//   the first-empty walk over the deref'd rows base = the word at
+//   [0x830684F4] (stride-0x10 rows; the row-obj identity per the
+//   fresh-batch decode = {count, ptr 0x830F092C@4, fn 0x82E50D30@8,
+//   0@0xC});
+//   the match = the linear stride-8 cmp against the compared key.
+// Hook contract: __imp__ FIRST (the callee writes its own r3), then
+// sample ctx.r3 = the RESULT (the row-obj idx, or 0xFFFFFFFF on any
+// bail). EVERY negative result is logged (rate-capped at the first 64
+// misses, then every 256th miss) — a −1 while our row object passes
+// through = the membership gate PROVEN (→ the FIX-B dep-pair path);
+// non-negative results are sampled (first 32, then every 256th), and a
+// run whose only misses come BEFORE the walk window (the boot burst) is
+// distinguishable from one DURING it by the prompt's timestamps.
+// Read-only, UTC-stamped by the logging sink (skate3_loc_dump-gated,
+// kHotReload).
+extern "C" REX_FUNC(sub_8290C548) {
+  __imp__sub_8290C548(ctx, base);
+  if (!REXCVAR_GET(skate3_loc_dump)) return;
+  static std::atomic<uint64_t> count{0};
+  static std::atomic<uint64_t> miss_count{0};
+  const int32_t ret = static_cast<int32_t>(ctx.r3.u32);
+  if (ret < 0) {
+    const uint64_t m = miss_count.fetch_add(1, std::memory_order_relaxed);
+    if (m < 64 || (m & 0xFF) == 0) {
+      REXLOG_INFO("Skate 3 pass67: PAIRFIND #{} ret={:#x} (MISS — "
+                  "candidate row misses the pair table)",
+                  m, ctx.r3.u32);
+    }
+  } else {
+    const uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
+    if (n < 32 || (n & 0xFF) == 0) {
+      REXLOG_INFO("Skate 3 pass67: PAIRFIND #{} ret={:#x}", n, ctx.r3.u32);
+    }
+  }
 }
 
 // ===========================================================================
