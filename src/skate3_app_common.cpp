@@ -1418,16 +1418,26 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   struct OverrideMapping {
     const char* guest_subpath;  // under the partition root, backslash form
     const char* host_file;      // inside custom_dir
+    bool is_dlc_big = false;
   };
   static constexpr OverrideMapping kMappings[] = {
-      {"data\\big\\db.big", "db_custom.big"},
-      {"data\\big\\miscboot.big", "miscboot_custom.big"},
-      {"data\\content\\missions.big", "missions_custom.big"},
+      {"data\\big\\db.big", "db_custom.big", false},
+      {"data\\big\\miscboot.big", "miscboot_custom.big", false},
+      {"data\\content\\missions.big", "missions_custom.big", false},
       // Custom OTS map pins: University global locators with a reused
       // challenge locator moved to the custom spot (analysis/custom/ots_v2).
       {"data\\content\\global_locators\\BAM\\DIST_University\\"
        "DIST_Univers_[0x0f7a42a9282864ac].rx2",
-       "global_locators_univ.rx2"},
+       "global_locators_univ.rx2", false},
+      // Official DLC Big Overrides:
+      // Danny Way's Hawaiian Dream
+      {"dway_park_00000000.big", "dway_park_custom.big", true},
+      // San Van Party Pack (Art Gallery & Zen Plaza / Marraffa's)
+      {"play_00000000.big", "play_custom.big", true},
+      // Maloof Money Cup 2010 NYC
+      {"maloof_money_cup_00000000.big", "maloof_custom.big", true},
+      // Black Box Park
+      {"presell_00000000.big", "presell_custom.big", true},
   };
 
   // Thin wrapper so every resolution through the override device is visible:
@@ -1486,6 +1496,28 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     fs->RegisterSymbolicLink(d_scheme_fwd, target);
     fs->RegisterSymbolicLink(big_scheme, target);
     fs->RegisterSymbolicLink(big_scheme_fwd, target);
+
+    if (mapping.is_dlc_big) {
+      for (int i = 1; i <= 32; ++i) {
+        const std::string content_bs =
+            fmt::format("\\Device\\Content\\{}\\{}", i, mapping.guest_subpath);
+        const std::string content_bs_double =
+            fmt::format("\\Device\\Content\\{}\\\\{}", i, mapping.guest_subpath);
+        const std::string content_fwd =
+            fmt::format("\\Device\\Content\\{}/{}", i, mapping.guest_subpath);
+        const std::string content_fwd_double =
+            fmt::format("\\Device\\Content\\{}//{}", i, mapping.guest_subpath);
+        fs->RegisterSymbolicLink(content_bs, target);
+        fs->RegisterSymbolicLink(content_bs_double, target);
+        fs->RegisterSymbolicLink(content_fwd, target);
+        fs->RegisterSymbolicLink(content_fwd_double, target);
+      }
+      const std::string dlcbig_bs = std::string("dlcbig:\\") + mapping.guest_subpath;
+      const std::string dlcbig_fwd = std::string("dlcbig:/") + mapping.guest_subpath;
+      fs->RegisterSymbolicLink(dlcbig_bs, target);
+      fs->RegisterSymbolicLink(dlcbig_fwd, target);
+    }
+
     ++installed;
     REXLOG_INFO("Skate 3 custom bigs: {} -> {}", mapping.guest_subpath, target);
   }

@@ -12,15 +12,9 @@
 //
 // Retail 3.0.0.0: guard at 0x82F44E40, trampoline at 0x83092CC0.
 // Title update 3.0.3.0: guard at 0x82F6FAA0, trampoline at 0x830EF8C0.
-#if SKATE3_HAS_TITLE_UPDATE
 #define SKATE3_EXCEPTION_GUARD_FUNC sub_82F6FAA0
 #define SKATE3_EXCEPTION_GUARD_IMP __imp__sub_82F6FAA0
 constexpr uint32_t kExceptionTrampoline = 0x830EF8C0u;
-#else
-#define SKATE3_EXCEPTION_GUARD_FUNC sub_82F44E40
-#define SKATE3_EXCEPTION_GUARD_IMP __imp__sub_82F44E40
-constexpr uint32_t kExceptionTrampoline = 0x83092CC0u;
-#endif
 
 extern "C" REX_FUNC(SKATE3_EXCEPTION_GUARD_IMP);
 

@@ -1,6 +1,6 @@
 # Modular Challenge Packs (Recomp Custom DLC)
 
-Skate 3 Recomp supports modular, toggleable custom challenge packs. This allows authors to create and distribute challenge packs that players can enable or disable at will with a game restart, without touching or dirtying base game retail files.
+Skate 3 Recomp supports modular, toggleable custom challenge packs across **both the base game and all official DLC packages**. This allows authors to create and distribute challenge packs that players can enable or disable at will with a game restart, without touching or dirtying base game retail files or stock DLC archives.
 
 ---
 
@@ -10,11 +10,11 @@ Custom packs live in `custom_packs/` (or `build/custom_packs/`):
 
 ```text
 custom_packs/
-└── west_coast_ots/
-    ├── pack.json             # Pack metadata and challenge definitions
-    └── missions/             # (Optional) Pre-built custom mission payloads
-        └── ots_univ_16/
-            └── cSim_Global.xsf
+├── west_coast_ots/
+│   ├── pack.json             # Pack metadata (dist_university, 5 spots)
+│   └── missions/             # (Optional) Pre-built custom mission payloads
+└── hawaiian_dream_ots/
+    └── pack.json             # Danny Way's Hawaiian Dream custom OTS (dist_dannyway)
 ```
 
 ---
@@ -29,11 +29,26 @@ Players can manage their mods directly from the in-game pause/settings menu:
 4. Toggle any mod between **`[Disabled]`** and **`[Enabled]`**.
 5. When a mod toggle is changed, the menu displays a restart notification (*"Mod changes require a restart"*).
 6. Select **`Apply & Restart`** (or press the corresponding gamepad button) to save the toggles and restart Skate 3.
-7. On game startup, the recomp automatically compiles the newly enabled mods into the virtual filesystem cache (or reverts cleanly to pure retail disc state if all mods are turned off).
+7. On game startup, the recomp automatically compiles the newly enabled mods into the virtual filesystem cache (or reverts cleanly to pure retail disc/DLC state if all mods are turned off).
 
 ---
 
-## 3. Managing Packs (CLI)
+## 3. Supported Districts & Target Archives
+
+The compositor automatically routes challenges to their correct destination container based on the `district` field in `pack.json`:
+
+| District ID(s) | DLC / World Location | Source Archive | Composed Output | Template Challenge |
+| :--- | :--- | :--- | :--- | :--- |
+| `dist_university`, `dist_downtown`, `dist_industrial` | Base Game (Port Carverton) | Disc `db.big`, `missions.big` | `custom_bigs/db_custom.big`, `missions_custom.big`, `global_locators_univ.rx2` | `ots_univ_02` |
+| `dist_dannyway`, `dist_dwmc`, `dist_dwgh` | Danny Way's Hawaiian Dream | `dway_park_00000000.big` | `custom_bigs/dway_park_custom.big` | `ots_dwmc_01` |
+| `dist_maloof`, `dist_mmcn` | Maloof Money Cup 2010 NYC | `maloof_money_cup_00000000.big` | `custom_bigs/maloof_custom.big` | `ots_mmcn_01` |
+| `dist_artgallery`, `dist_zen`, `dist_play` | San Van Party Pack (Art Gallery & Zen Plaza) | `play_00000000.big` | `custom_bigs/play_custom.big` | `ots_artg_01` |
+
+Global text localization strings and camera intro sequences are automatically merged into `custom_bigs/miscboot_custom.big` so challenge titles and descriptions resolve everywhere regardless of detection order.
+
+---
+
+## 4. Managing Packs (CLI)
 
 Use `tools/pack_manager.py` to inspect, enable, disable, and scaffold packs:
 
@@ -46,6 +61,8 @@ Output:
 ================================================================================
 STATUS     ID                   NAME                     VERSION  CHALLENGES
 ================================================================================
+[ENABLED]  hawaiian_dream_ots   Hawaiian Dream OTS       1.0.0    1 spots
+    - ots_dwmc_03  'Mega Ramp Gap' (dist_dannyway)
 [ENABLED]  west_coast_ots       West Coast OTS           1.0.0    5 spots
     - ots_univ_16  'Snoop' (dist_university)
     - ots_univ_17  'Dre' (dist_university)
@@ -53,19 +70,19 @@ STATUS     ID                   NAME                     VERSION  CHALLENGES
     - ots_univ_19  'Cube' (dist_university)
     - ots_univ_20  'Warren' (dist_university)
 ================================================================================
-Active in game: 1 pack(s) (west_coast_ots)
+Active in game: 2 pack(s) (hawaiian_dream_ots, west_coast_ots)
 ```
 
 ### Enable a Pack
 ```bash
-python3 tools/pack_manager.py enable west_coast_ots
+python3 tools/pack_manager.py enable hawaiian_dream_ots
 ```
 
 ### Disable a Pack
 ```bash
-python3 tools/pack_manager.py disable west_coast_ots
+python3 tools/pack_manager.py disable hawaiian_dream_ots
 ```
-*Note: When all packs are disabled, `custom_bigs/` is restored to 100% clean stock retail disc state, and the recomp automatically runs pure vanilla retail data.*
+*Note: When all packs targeting a DLC or the base game are disabled, their custom bigs are cleanly removed/reverted, and the recomp automatically runs stock retail data.*
 
 ### Manual / File-Manager Toggle
 You can also toggle packs without the CLI:
@@ -76,36 +93,46 @@ On next game restart, the recomp automatically synchronizes and loads the active
 
 ---
 
-## 4. Authoring New Packs
+## 5. Authoring New Packs
 
 ### Scaffold a New Pack
 ```bash
-python3 tools/pack_manager.py scaffold my_new_pack --name "My New Pack"
+# Scaffold for Base Game University:
+python3 tools/pack_manager.py scaffold my_pack --name "My University Pack" --district dist_university
+
+# Scaffold for Danny Way's Hawaiian Dream:
+python3 tools/pack_manager.py scaffold hawaii_mod --name "Hawaii Mod" --district dist_dannyway
+
+# Scaffold for Maloof Money Cup:
+python3 tools/pack_manager.py scaffold maloof_mod --name "Maloof Mod" --district dist_maloof
+
+# Scaffold for San Van Party Pack:
+python3 tools/pack_manager.py scaffold artg_mod --name "Art Gallery Mod" --district dist_artgallery
 ```
 
 ### `pack.json` Schema
 ```json
 {
-  "id": "my_new_pack",
-  "name": "My New Pack",
+  "id": "hawaiian_dream_ots",
+  "name": "Hawaiian Dream OTS",
   "version": "1.0.0",
-  "author": "Skater",
-  "description": "Custom Own-The-Spot challenges.",
+  "author": "Skate 3 Recomp Community",
+  "description": "Custom Own-The-Spot challenge in Danny Way's Hawaiian Dream compound.",
   "enabled": true,
   "spots": [
     {
-      "id": "ots_univ_21",
-      "num": 21,
-      "title": "Stair Set Ledge",
-      "desc": "Score big on this university stair set.",
-      "district": "dist_university",
-      "locator": "ots_univ_10_challengelocator_01",
-      "site": [410.5, 72.0, -255.0],
-      "cam": [408.0, 73.5, -257.5],
+      "id": "ots_dwmc_03",
+      "num": 3,
+      "title": "Mega Ramp Gap",
+      "desc": "Drop in and launch over the mega gap to own Danny Way's Hawaiian Dream.",
+      "district": "dist_dannyway",
+      "site": [137.31, -17.27, -23.23],
+      "cam": [135.0, -16.0, -25.0],
+      "locator": "ots_dwmc_01_challengelocator_01",
       "runway": 16.0,
       "scores": {
-        "own": 600,
-        "kill": 1000
+        "own": 800,
+        "kill": 1200
       }
     }
   ]
@@ -113,28 +140,22 @@ python3 tools/pack_manager.py scaffold my_new_pack --name "My New Pack"
 ```
 
 ### Key Spot Attributes:
+- **`district`**: The target DLC or base game district (`dist_university`, `dist_dannyway`, `dist_maloof`, `dist_artgallery`, etc.).
 - **`site`**: `[X, Y, Z]` coordinates of the obstacle prop / scoring area.
 - **`cam`**: `[X, Y, Z]` coordinates of the camera capture position.
 - **`runway`**: Lead-in distance in meters (defaults to 16.0m) along the approach vector for player spawn and orientation.
-- **`locator`**: Base game district locator name to use for the map pin.
+- **`locator`**: Target district locator name to use for the map pin.
 - **`scores`**: Target `own` and `kill` point thresholds.
 
 ---
 
-## 5. Gameplay Engine Features Built-In
-
-The compositor automatically enforces the 3 established gameplay fixes:
-1. **Dynamic Camera Flythroughs**: Waypoints are generated in orbit around the obstacle, ending in a runway approach cut into gameplay.
-2. **Visual Indicator Cleanup**: Extra start arrows and collapsing path chevrons are suppressed; only the downward obstacle indicator is rendered.
-3. **Runway Starting Positions**: Player spawn and orientation vectors are computed along the lead-in approach angle with adequate distance to build trick speed.
-
----
-
-## 6. How the Recomp Loads Custom Packs
+## 6. How the Recomp Loads Custom DLC & Bigs
 
 1. At startup, `Skate3BaseApp::InstallCustomBigOverrides()` in `src/skate3_app_common.cpp` checks `custom_packs/`.
 2. It invokes `tools/pack_compositor.py` to verify the state hash of active packs against `custom_bigs/.pack_state.json`.
    - If nothing changed: execution continues in < 15ms.
-   - If packs were added, modified, enabled, or disabled: the compositor merges enabled packs on top of the clean stock disc bigs into `custom_bigs/`.
+   - If packs were added, modified, enabled, or disabled: the compositor merges enabled packs on top of the clean stock disc and DLC bigs into `custom_bigs/`.
    - If 0 packs are enabled: overrides are bypassed, loading stock retail data.
-3. VFS symlinks transparently redirect the guest filesystem calls (`db.big`, `miscboot.big`, `missions.big`, and `global_locators_univ.rx2`) to `custom_bigs/`.
+3. VFS symlinks transparently redirect the guest filesystem calls:
+   - Base game: `db.big`, `miscboot.big`, `missions.big`, and `global_locators_univ.rx2`.
+   - DLC packages: symlinks are registered across `\Device\Content\1..32\<dlc_big>` and `dlcbig:\<dlc_big>` to intercept guest DLC loads regardless of enumeration order.
