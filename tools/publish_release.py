@@ -131,12 +131,21 @@ def main():
     # Step 2: Ensure distribution directory exists
     DIST_DIR.mkdir(exist_ok=True)
 
+    extra_files = []
+    for folder in ['custom_packs', 'tools']:
+        fdir = REPO_ROOT / folder
+        if fdir.is_dir():
+            for p in fdir.rglob('*'):
+                if p.is_file() and not p.name.startswith('.') and p.suffix not in ('.pyc', '.pyo') and '__pycache__' not in p.parts:
+                    rel = p.relative_to(REPO_ROOT)
+                    extra_files.append((p, str(rel)))
+
     # Step 3: Package Linux Archive (Skate3Recomp-Linux.zip)
     linux_zip = DIST_DIR / 'Skate3Recomp-Linux.zip'
     linux_files = [
         (BUILD_DIR / 'skate3', 'skate3'),
         (BUILD_DIR / 'librexruntime.so', 'librexruntime.so'),
-    ]
+    ] + extra_files
     package_clean_zip(linux_zip, 'Skate3Recomp-Linux', linux_files)
 
     # Step 4: Package Windows Archive (Skate3Recomp-Windows.zip)
@@ -149,7 +158,7 @@ def main():
     win_files = [
         (WINDOWS_BIN_DIR / 'skate3.exe', 'skate3.exe'),
         (WINDOWS_BIN_DIR / 'rexruntime.dll', 'rexruntime.dll'),
-    ]
+    ] + extra_files
     package_clean_zip(win_zip, 'Skate3Recomp-Windows', win_files)
 
     print("\nClean, retail-free release archives ready in dist/:")
