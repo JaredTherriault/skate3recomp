@@ -145,7 +145,9 @@ python3 tools/pack_manager.py scaffold artg_mod --name "Art Gallery Mod" --distr
 - **`cam`**: `[X, Y, Z]` coordinates of the camera capture position.
 - **`runway`**: Lead-in distance in meters (defaults to 16.0m) along the approach vector for player spawn and orientation.
 - **`locator`**: Target district locator name to use for the map pin.
-- **`scores`**: Target `own` and `kill` point thresholds.
+- **`scores`**: Target `own` and `kill` point thresholds (see [OTS Design Guide](OTS_DESIGN_GUIDE.md#8-score-theory--target-balancing) for score balancing benchmarks).
+
+For complete spot geometry design, arrow unification, runway physics, camera flythroughs, and chevron suppression techniques, see the [Master OTS Design Guide](OTS_DESIGN_GUIDE.md).
 
 ---
 
