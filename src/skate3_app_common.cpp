@@ -1379,6 +1379,237 @@ void Skate3BaseApp::InstallBigDeviceAliases() {
   big_device_aliases_installed_ = true;
 }
 
+namespace {
+
+using rex::X_STATUS;
+
+#pragma pack(push, 1)
+struct DeltaFileHeader {
+  uint32_t magic;         // 'S3DL' (0x5333444C)
+  uint32_t version;       // 1
+  uint64_t virtual_size;
+  uint64_t base_size;
+  uint32_t chunk_count;
+  uint32_t reserved;
+  char base_name[64];
+};
+
+struct DeltaChunkHeader {
+  uint64_t offset;
+  uint32_t length;
+  uint32_t reserved;
+};
+#pragma pack(pop)
+
+struct DeltaChunk {
+  uint64_t offset = 0;
+  uint32_t length = 0;
+  std::vector<uint8_t> data;
+};
+
+struct DeltaOverlayData {
+  std::string base_name;
+  uint64_t virtual_size = 0;
+  uint64_t base_size = 0;
+  std::vector<DeltaChunk> chunks;
+  std::filesystem::path stock_path;
+};
+
+std::shared_ptr<DeltaOverlayData> LoadDeltaOverlay(const std::filesystem::path& delta_path) {
+  FILE* file = rex::filesystem::OpenFile(delta_path, "rb");
+  if (!file) {
+    REXLOG_ERROR("Skate 3 delta: cannot open {}", delta_path.string());
+    return nullptr;
+  }
+  DeltaFileHeader hdr{};
+  if (fread(&hdr, 1, sizeof(hdr), file) != sizeof(hdr)) {
+    fclose(file);
+    REXLOG_ERROR("Skate 3 delta: header read failed {}", delta_path.string());
+    return nullptr;
+  }
+  if (hdr.magic != 0x5333444C) {  // 'S3DL'
+    fclose(file);
+    REXLOG_ERROR("Skate 3 delta: bad magic {:08X} in {}", hdr.magic, delta_path.string());
+    return nullptr;
+  }
+
+  auto data = std::make_shared<DeltaOverlayData>();
+  hdr.base_name[sizeof(hdr.base_name) - 1] = '\0';
+  data->base_name = hdr.base_name;
+  data->virtual_size = hdr.virtual_size;
+  data->base_size = hdr.base_size;
+
+  for (uint32_t i = 0; i < hdr.chunk_count; ++i) {
+    DeltaChunkHeader chdr{};
+    if (fread(&chdr, 1, sizeof(chdr), file) != sizeof(chdr)) {
+      fclose(file);
+      REXLOG_ERROR("Skate 3 delta: chunk {} header read failed in {}", i, delta_path.string());
+      return nullptr;
+    }
+    DeltaChunk chunk;
+    chunk.offset = chdr.offset;
+    chunk.length = chdr.length;
+    chunk.data.resize(chdr.length);
+    if (chdr.length > 0) {
+      if (fread(chunk.data.data(), 1, chdr.length, file) != chdr.length) {
+        fclose(file);
+        REXLOG_ERROR("Skate 3 delta: chunk {} payload read failed in {}", i, delta_path.string());
+        return nullptr;
+      }
+    }
+    data->chunks.push_back(std::move(chunk));
+  }
+  fclose(file);
+  return data;
+}
+
+class DeltaOverlayFile : public rex::filesystem::File {
+ public:
+  DeltaOverlayFile(uint32_t file_access, rex::filesystem::Entry* entry,
+                   std::shared_ptr<DeltaOverlayData> delta_data,
+                   std::unique_ptr<rex::filesystem::FileHandle> base_file)
+      : rex::filesystem::File(file_access, entry),
+        delta_data_(std::move(delta_data)),
+        base_file_(std::move(base_file)) {}
+
+  ~DeltaOverlayFile() override = default;
+
+  void Destroy() override {
+    delete this;
+  }
+
+  X_STATUS ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
+                    size_t* out_bytes_read) override {
+    if (!(file_access_ & (rex::filesystem::FileAccess::kGenericRead |
+                          rex::filesystem::FileAccess::kFileReadData))) {
+      return X_STATUS_ACCESS_DENIED;
+    }
+    if (byte_offset >= delta_data_->virtual_size) {
+      if (out_bytes_read) *out_bytes_read = 0;
+      return X_STATUS_END_OF_FILE;
+    }
+
+    size_t to_read = buffer.size();
+    if (byte_offset + to_read > delta_data_->virtual_size) {
+      to_read = static_cast<size_t>(delta_data_->virtual_size - byte_offset);
+    }
+
+    // 1. Read base data if within base_size and base_file is available
+    if (byte_offset < delta_data_->base_size && base_file_) {
+      const size_t base_read_len =
+          std::min(to_read, static_cast<size_t>(delta_data_->base_size - byte_offset));
+      size_t bytes_read = 0;
+      if (!base_file_->Read(byte_offset, buffer.data(), base_read_len, &bytes_read)) {
+        std::memset(buffer.data(), 0, base_read_len);
+      }
+      if (to_read > base_read_len) {
+        std::memset(buffer.data() + base_read_len, 0, to_read - base_read_len);
+      }
+    } else {
+      std::memset(buffer.data(), 0, to_read);
+    }
+
+    // 2. Overlay chunks
+    const uint64_t req_start = byte_offset;
+    const uint64_t req_end = byte_offset + to_read;
+
+    for (const auto& chunk : delta_data_->chunks) {
+      const uint64_t chunk_start = chunk.offset;
+      const uint64_t chunk_end = chunk.offset + chunk.length;
+      if (chunk_start < req_end && chunk_end > req_start) {
+        const uint64_t ov_start = std::max(req_start, chunk_start);
+        const uint64_t ov_end = std::min(req_end, chunk_end);
+        const size_t dest_off = static_cast<size_t>(ov_start - req_start);
+        const size_t src_off = static_cast<size_t>(ov_start - chunk_start);
+        const size_t ov_len = static_cast<size_t>(ov_end - ov_start);
+        std::memcpy(buffer.data() + dest_off, chunk.data.data() + src_off, ov_len);
+      }
+    }
+
+    if (out_bytes_read) {
+      *out_bytes_read = to_read;
+    }
+    return X_STATUS_SUCCESS;
+  }
+
+  X_STATUS WriteSync(std::span<const uint8_t> buffer, size_t byte_offset,
+                     size_t* out_bytes_written) override {
+    return X_STATUS_ACCESS_DENIED;
+  }
+
+  X_STATUS SetLength(size_t length) override {
+    return X_STATUS_ACCESS_DENIED;
+  }
+
+ private:
+  std::shared_ptr<DeltaOverlayData> delta_data_;
+  std::unique_ptr<rex::filesystem::FileHandle> base_file_;
+};
+
+class DeltaOverlayEntry : public rex::filesystem::Entry {
+ public:
+  DeltaOverlayEntry(rex::filesystem::Device* device, rex::filesystem::Entry* parent,
+                    const std::string_view path,
+                    std::shared_ptr<DeltaOverlayData> delta_data)
+      : rex::filesystem::Entry(device, parent, path),
+        delta_data_(std::move(delta_data)) {
+    attributes_ = rex::filesystem::kFileAttributeNormal | rex::filesystem::kFileAttributeReadOnly;
+    size_ = static_cast<size_t>(delta_data_->virtual_size);
+    allocation_size_ = (size_ + 0xFFF) & ~static_cast<size_t>(0xFFF);
+  }
+
+  X_STATUS Open(uint32_t desired_access, rex::filesystem::File** out_file) override {
+    std::unique_ptr<rex::filesystem::FileHandle> base_handle;
+    if (!delta_data_->stock_path.empty() && std::filesystem::exists(delta_data_->stock_path)) {
+      base_handle = rex::filesystem::FileHandle::OpenExisting(
+          delta_data_->stock_path, rex::filesystem::FileAccess::kFileReadData);
+    }
+    if (!base_handle && delta_data_->base_size > 0) {
+      REXLOG_ERROR("Skate 3 delta overlay: failed to open stock base file {}",
+                   delta_data_->stock_path.string());
+      return X_STATUS_NO_SUCH_FILE;
+    }
+    *out_file = new DeltaOverlayFile(desired_access, this, delta_data_, std::move(base_handle));
+    return X_STATUS_SUCCESS;
+  }
+
+ private:
+  std::shared_ptr<DeltaOverlayData> delta_data_;
+};
+
+class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
+ public:
+  LoggingOverrideDevice(const std::string_view mount_path,
+                        const std::filesystem::path& host_path)
+      : rex::filesystem::HostPathDevice(mount_path, host_path, false) {}
+
+  void RegisterDeltaEntry(const std::string& name, std::shared_ptr<DeltaOverlayData> delta_data) {
+    auto entry = std::make_unique<DeltaOverlayEntry>(this, nullptr, "\\" + name, std::move(delta_data));
+    delta_entries_[name] = std::move(entry);
+  }
+
+  rex::filesystem::Entry* ResolvePath(const std::string_view path) override {
+    std::string normalized(path);
+    while (!normalized.empty() && (normalized.front() == '\\' || normalized.front() == '/')) {
+      normalized.erase(normalized.begin());
+    }
+    auto it = delta_entries_.find(normalized);
+    if (it != delta_entries_.end()) {
+      REXLOG_INFO("Skate 3 custom bigs: RESOLVE (DELTA) '{}' -> FOUND", path);
+      return it->second.get();
+    }
+    auto* entry = rex::filesystem::HostPathDevice::ResolvePath(path);
+    REXLOG_INFO("Skate 3 custom bigs: RESOLVE '{}' -> {}",
+                path, entry ? "FOUND" : "NOT-FOUND");
+    return entry;
+  }
+
+ private:
+  std::unordered_map<std::string, std::unique_ptr<DeltaOverlayEntry>> delta_entries_;
+};
+
+}  // namespace
+
 void Skate3BaseApp::InstallCustomBigOverrides() {
   if (custom_bigs_installed_ || !runtime() || !runtime()->file_system()) {
     return;
@@ -1480,23 +1711,6 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
       {"presell_00000000.big", "presell_custom.big", true},
   };
 
-  // Thin wrapper so every resolution through the override device is visible:
-  // each resolve = one 'Skate 3 custom bigs: RESOLVE' line (the path, the
-  // found/missing result, and the host file the entry maps to).
-  class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
-   public:
-    LoggingOverrideDevice(const std::string_view mount_path,
-                          const std::filesystem::path& host_path)
-        : rex::filesystem::HostPathDevice(mount_path, host_path, false) {}
-    rex::filesystem::Entry* ResolvePath(
-        const std::string_view path) override {
-      auto* entry = rex::filesystem::HostPathDevice::ResolvePath(path);
-      REXLOG_INFO("Skate 3 custom bigs: RESOLVE '{}' -> {}",
-                  path, entry ? "FOUND" : "NOT-FOUND");
-      return entry;
-    }
-  };
-
   auto device = std::make_unique<LoggingOverrideDevice>(
       "skate3custombigs:", custom_dir);
   if (!device->Initialize()) {
@@ -1504,16 +1718,95 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
                 custom_dir.string());
     return;
   }
-  runtime()->file_system()->RegisterDevice(std::move(device));
+
+  auto find_stock_file = [&](const std::string_view guest_subpath, bool is_dlc_big,
+                             const std::string& base_hint) -> std::filesystem::path {
+    // 1. Direct path relative to game_data_root (for base-game bigs)
+    if (!is_dlc_big) {
+      auto p = runtime()->game_data_root() / guest_subpath;
+      if (std::filesystem::exists(p) && std::filesystem::file_size(p) > 0) return p;
+      std::string s(guest_subpath);
+      std::replace(s.begin(), s.end(), '\\', '/');
+      p = runtime()->game_data_root() / s;
+      if (std::filesystem::exists(p) && std::filesystem::file_size(p) > 0) return p;
+    }
+
+    const std::string filename = !base_hint.empty()
+        ? base_hint
+        : std::filesystem::path(guest_subpath).filename().string();
+
+    // 2. Check stock_bigs cache folders
+    for (const auto& dir : { app_root / "stock_bigs",
+                            app_root.parent_path() / "build" / "stock_bigs",
+                            app_root / "build" / "stock_bigs",
+                            app_root.parent_path() / "stock_bigs" }) {
+      auto p = dir / filename;
+      if (std::filesystem::exists(p) && std::filesystem::file_size(p) > 0) return p;
+    }
+
+    // 3. Scan user_data_root DLC folders
+    const auto user_root = runtime()->user_data_root();
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(user_root, ec)) {
+      if (ec) break;
+      if (entry.is_regular_file() && entry.path().filename() == filename) {
+        if (entry.path().string().find("custom_bigs") == std::string::npos &&
+            std::filesystem::file_size(entry.path()) > 0) {
+          return entry.path();
+        }
+      }
+    }
+
+    // 4. Scan game_data_root recursively
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(runtime()->game_data_root(), ec)) {
+      if (ec) break;
+      if (entry.is_regular_file() && entry.path().filename() == filename) {
+        if (entry.path().string().find("custom_bigs") == std::string::npos &&
+            std::filesystem::file_size(entry.path()) > 0) {
+          return entry.path();
+        }
+      }
+    }
+
+    return {};
+  };
 
   size_t installed = 0;
   auto* fs = runtime()->file_system();
   for (const auto& mapping : kMappings) {
-    const auto host_path = custom_dir / mapping.host_file;
-    if (!std::filesystem::exists(host_path)) {
-      REXLOG_WARN("Skate 3 custom bigs: {} not found, skipped", host_path.string());
+    std::filesystem::path delta_path = custom_dir / mapping.host_file;
+    delta_path.replace_extension(".delta");
+    const auto big_path = custom_dir / mapping.host_file;
+
+    const bool use_delta = std::filesystem::exists(delta_path);
+    const bool use_big = !use_delta && std::filesystem::exists(big_path);
+
+    if (!use_delta && !use_big) {
+      REXLOG_WARN("Skate 3 custom bigs: {} not found (neither delta nor big), skipped",
+                  mapping.host_file);
       continue;
     }
+
+    if (use_delta) {
+      auto delta_data = LoadDeltaOverlay(delta_path);
+      if (delta_data) {
+        delta_data->stock_path =
+            find_stock_file(mapping.guest_subpath, mapping.is_dlc_big, delta_data->base_name);
+        if (delta_data->stock_path.empty() && delta_data->base_size > 0) {
+          REXLOG_ERROR("Skate 3 custom bigs: stock base file not found for delta: {}",
+                       delta_path.string());
+          continue;
+        }
+        REXLOG_INFO("Skate 3 custom bigs: DELTA OVERLAY active: {} (base={})",
+                    delta_path.filename().string(), delta_data->stock_path.string());
+        device->RegisterDeltaEntry(mapping.host_file, delta_data);
+        device->RegisterDeltaEntry(delta_path.filename().string(), delta_data);
+      } else {
+        REXLOG_ERROR("Skate 3 custom bigs: failed to load delta: {}", delta_path.string());
+        continue;
+      }
+    }
+
     const std::string target =
         std::string("skate3custombigs:\\") + mapping.host_file;
     const std::string guest_bs =
@@ -1559,8 +1852,11 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     }
 
     ++installed;
-    REXLOG_INFO("Skate 3 custom bigs: {} -> {}", mapping.guest_subpath, target);
+    REXLOG_INFO("Skate 3 custom bigs: {} -> {} ({})", mapping.guest_subpath, target,
+                use_delta ? "DELTA OVERLAY" : "HOST BIG");
   }
+
+  runtime()->file_system()->RegisterDevice(std::move(device));
 
   if (installed) {
     custom_bigs_installed_ = true;

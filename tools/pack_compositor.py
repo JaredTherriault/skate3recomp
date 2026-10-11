@@ -29,6 +29,9 @@ from pathlib import Path
 
 # Paths
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 OTS_V2 = REPO_ROOT / 'analysis' / 'custom' / 'ots_v2'
 if str(OTS_V2) not in sys.path:
     sys.path.insert(0, str(OTS_V2))
@@ -1227,10 +1230,14 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
                 stream_entry.csize = 0
                 stream_entry.ctype = 0
 
-    # Write out
-    out_path = out_dir / cfg['custom_big']
-    bigfile.write(b, out_path)
-    print(f"  + Wrote {cfg['custom_big']} ({os.path.getsize(out_path)} bytes, {len(spots)} spot(s))")
+    # Write out delta
+    delta_name = cfg['custom_big'].replace('.big', '.delta')
+    delta_path = out_dir / delta_name
+    bigfile.write_delta(b, delta_path, stock_path)
+    legacy_big = out_dir / cfg['custom_big']
+    if legacy_big.exists():
+        legacy_big.unlink()
+    print(f"  + Wrote {delta_name} ({os.path.getsize(delta_path)} bytes, {len(spots)} spot(s))")
 
 
 def discover_packs(packs_dir):
@@ -1286,29 +1293,32 @@ def compute_packs_state(enabled_packs):
 
 
 def restore_stock_retail(out_dir):
-    """Restore build/custom_bigs to 100% clean stock retail disc files."""
+    """Restore build/custom_bigs: clean up all overrides so game runs 100% stock."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(STOCK_DATA / 'big' / 'db.big', out_dir / 'db_custom.big')
-    shutil.copy2(STOCK_DATA / 'big' / 'miscboot.big', out_dir / 'miscboot_custom.big')
-    shutil.copy2(STOCK_DATA / 'content' / 'missions.big', out_dir / 'missions_custom.big')
+    cleanup_names = [
+        'db_custom.delta', 'db_custom.big',
+        'miscboot_custom.delta', 'miscboot_custom.big',
+        'missions_custom.delta', 'missions_custom.big',
+        'presell_custom.delta', 'presell_custom.big',
+    ]
+    for cfg in DLC_CONFIGS.values():
+        cleanup_names.append(cfg['custom_big'])
+        cleanup_names.append(cfg['custom_big'].replace('.big', '.delta'))
+    for name in cleanup_names:
+        p = out_dir / name
+        if p.exists():
+            p.unlink()
     for dcfg in BASE_DISTRICT_CONFIGS.values():
         rx_out = out_dir / dcfg['rx2_out']
         if rx_out.exists():
             rx_out.unlink()
-    for cfg in DLC_CONFIGS.values():
-        p = out_dir / cfg['custom_big']
-        if p.exists():
-            p.unlink()
-    presell_custom = out_dir / 'presell_custom.big'
-    if presell_custom.exists():
-        presell_custom.unlink()
     active_marker = out_dir / '.active'
     if active_marker.exists():
         active_marker.unlink()
     state_file = out_dir / '.pack_state.json'
     with open(state_file, 'w', encoding='utf-8') as f:
         json.dump({'active_packs': [], 'active_count': 0, 'state_hash': 'STOCK'}, f, indent=2)
-    print("Restored custom bigs to stock retail disc state (0 custom packs active).")
+    print("Cleaned custom bigs: 0 custom packs active. Game runs pure stock retail data.")
 
 
 def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
@@ -1365,22 +1375,29 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
     base_spots = spots_by_target.get('base', [])
     if base_spots:
         resolve_base_locators(base_spots)
-        print(f"Building db_custom.big ({len(base_spots)} base challenge(s))...")
-        db = bigfile.read(STOCK_DATA / 'big' / 'db.big', KF)
+        stock_db = STOCK_DATA / 'big' / 'db.big'
+        print(f"Building db_custom.delta ({len(base_spots)} base challenge(s))...")
+        db = bigfile.read(stock_db, KF)
         build_db(db, base_spots)
-        bigfile.write(db, out_dir / 'db_custom.big')
+        bigfile.write_delta(db, out_dir / 'db_custom.delta', stock_db)
+        if (out_dir / 'db_custom.big').exists():
+            (out_dir / 'db_custom.big').unlink()
 
-        print(f"Building missions_custom.big ({len(base_spots)} base challenge(s))...")
-        mb = bigfile.read(STOCK_DATA / 'content' / 'missions.big')
+        stock_mb = STOCK_DATA / 'content' / 'missions.big'
+        print(f"Building missions_custom.delta ({len(base_spots)} base challenge(s))...")
+        mb = bigfile.read(stock_mb)
         build_missions(mb, base_spots, pack_dirs_by_spot)
-        bigfile.write(mb, out_dir / 'missions_custom.big')
+        bigfile.write_delta(mb, out_dir / 'missions_custom.delta', stock_mb)
+        if (out_dir / 'missions_custom.big').exists():
+            (out_dir / 'missions_custom.big').unlink()
 
         print("Building district global locators...")
         build_rx2(out_dir, base_spots)
     else:
-        # Revert base to clean disc files
-        shutil.copy2(STOCK_DATA / 'big' / 'db.big', out_dir / 'db_custom.big')
-        shutil.copy2(STOCK_DATA / 'content' / 'missions.big', out_dir / 'missions_custom.big')
+        for name in ['db_custom.delta', 'db_custom.big', 'missions_custom.delta', 'missions_custom.big']:
+            p = out_dir / name
+            if p.exists():
+                p.unlink()
         for dcfg in BASE_DISTRICT_CONFIGS.values():
             rx_out = out_dir / dcfg['rx2_out']
             if rx_out.exists():
@@ -1390,17 +1407,23 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
     for dlc_id, cfg in DLC_CONFIGS.items():
         dlc_spots = spots_by_target.get(dlc_id, [])
         custom_big_path = out_dir / cfg['custom_big']
+        custom_delta_path = out_dir / cfg['custom_big'].replace('.big', '.delta')
         if dlc_spots:
             build_dlc_big(dlc_id, cfg, dlc_spots, pack_dirs_by_spot, out_dir)
         else:
+            if custom_delta_path.exists():
+                custom_delta_path.unlink()
             if custom_big_path.exists():
                 custom_big_path.unlink()
 
-    # 3. Global Localization & Scene intros (miscboot_custom.big)
-    print("Building miscboot_custom.big (all challenges)...")
-    misc = bigfile.read(STOCK_DATA / 'big' / 'miscboot.big')
+    # 3. Global Localization & Scene intros (miscboot_custom.delta)
+    print("Building miscboot_custom.delta (all challenges)...")
+    stock_misc = STOCK_DATA / 'big' / 'miscboot.big'
+    misc = bigfile.read(stock_misc)
     build_loc(misc, all_spots)
-    bigfile.write(misc, out_dir / 'miscboot_custom.big')
+    bigfile.write_delta(misc, out_dir / 'miscboot_custom.delta', stock_misc)
+    if (out_dir / 'miscboot_custom.big').exists():
+        (out_dir / 'miscboot_custom.big').unlink()
 
     # Mark active state
     (out_dir / '.active').touch()
