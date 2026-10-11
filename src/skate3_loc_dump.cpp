@@ -1261,7 +1261,7 @@ std::thread StartLogThread() {
         continue;
       }
       if (f == nullptr) {
-        f = std::fopen(path.c_str(), "a");
+        f = std::fopen(path.string().c_str(), "a");
         if (f == nullptr) {
           if (!logged_open_fail) {
             REXLOG_WARN("Skate 3 coord dump: cannot open {}", path.string());
@@ -1291,7 +1291,11 @@ std::thread StartLogThread() {
       const auto now_sys = std::chrono::system_clock::now();
       const std::time_t tt = std::chrono::system_clock::to_time_t(now_sys);
       std::tm tm{};
+#ifdef _WIN32
+      localtime_s(&tm, &tt);
+#else
       localtime_r(&tt, &tm);
+#endif
       const uint32_t ms = uint32_t(
           std::chrono::duration_cast<std::chrono::milliseconds>(
               now_sys.time_since_epoch())
@@ -1619,7 +1623,11 @@ void CaptureOtsCandidate() {
   const auto now_sys = std::chrono::system_clock::now();
   const std::time_t tt = std::chrono::system_clock::to_time_t(now_sys);
   std::tm tm{};
+#ifdef _WIN32
+  gmtime_s(&tm, &tt);
+#else
   gmtime_r(&tt, &tm);
+#endif
   const uint32_t ms = uint32_t(
       std::chrono::duration_cast<std::chrono::milliseconds>(
           now_sys.time_since_epoch())

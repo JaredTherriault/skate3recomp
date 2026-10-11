@@ -1,0 +1,141 @@
+name: Build & Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux Binary
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install LLVM 20 and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release software-properties-common
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+          sudo apt-get install -y \
+            git cmake ninja-build build-essential pkg-config p7zip-full \
+            clang-20 lld-20 \
+            libgtk-3-dev libx11-xcb-dev \
+            libvulkan-dev vulkan-tools mesa-vulkan-drivers \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev
+
+      - name: Configure CMake (Linux Release)
+        run: |
+          cmake --preset linux-release
+
+      - name: Build Linux Binaries
+        run: |
+          cmake --build --preset linux-release --parallel
+
+      - name: Package Linux Archive
+        run: |
+          mkdir -p package/Skate3Recomp-Linux
+          cp out/build/linux-release/skate3 package/Skate3Recomp-Linux/
+          cp out/build/linux-release/librexruntime.so package/Skate3Recomp-Linux/
+          if [ -f skate3.toml ]; then
+            cp skate3.toml package/Skate3Recomp-Linux/
+          fi
+          cd package && zip -r ../Skate3Recomp-Linux.zip Skate3Recomp-Linux
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Skate3Recomp-Linux
+          path: Skate3Recomp-Linux.zip
+          retention-days: 1
+
+  build-windows:
+    name: Build Windows Binary
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup MSVC Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Ninja
+        uses: ashutoshvarma/setup-ninja@v1.1
+
+      - name: Configure CMake (Windows Clang-cl Release)
+        shell: pwsh
+        run: |
+          cmake -B out/build/release -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DREXSDK_DIR="${{ github.workspace }}/third_party/rexglue-sdk" `
+            -DREXGLUE_USE_VULKAN=ON `
+            -DREXGLUE_USE_D3D12=ON
+
+      - name: Build Windows Binaries
+        shell: pwsh
+        run: |
+          cmake --build out/build/release --config Release --parallel
+
+      - name: Package Windows Archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package/Skate3Recomp-Windows -Force
+          Copy-Item out/build/release/skate3.exe package/Skate3Recomp-Windows/
+          Copy-Item out/build/release/rexruntime.dll package/Skate3Recomp-Windows/
+          if (Test-Path skate3.toml) {
+            Copy-Item skate3.toml package/Skate3Recomp-Windows/
+          }
+          Compress-Archive -Path package/Skate3Recomp-Windows -DestinationPath Skate3Recomp-Windows.zip
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Skate3Recomp-Windows
+          path: Skate3Recomp-Windows.zip
+          retention-days: 1
+
+  publish-release:
+    name: Publish Release Assets
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Skate3Recomp-Linux
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Skate3Recomp-Windows
+
+      - name: Attach Assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Skate3Recomp-Linux.zip
+            Skate3Recomp-Windows.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

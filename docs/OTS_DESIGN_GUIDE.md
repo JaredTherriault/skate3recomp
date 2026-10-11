@@ -177,6 +177,8 @@ Not every object in Port Carverton or the DLC compounds makes a great OTS spot. 
 | **Flatland Only** | ❌ **Unviable** | Mechanically impossible to reach high score thresholds without an obstacle. |
 | **Tight Blind Landings** | ❌ **Unviable** | Landing directly into walls, benches, or out-of-bounds volumes ruins player flow. |
 
+The best, most memorable OTS challenges are built on obstacles where players can build great speed or see a great view.
+
 ---
 
 ## 8. Score Theory & Target Balancing

@@ -38,6 +38,29 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <cmath>
+
+// MSVC CRT lacks C23 roundeven / roundevenf (halfway cases rounded to even).
+// LLVM lowering of __builtin_roundevenf emits calls to roundevenf when targeting MSVC.
+extern "C" {
+float roundevenf(float v) {
+  float rounded = std::round(v);
+  float diff = rounded - v;
+  if (std::fabs(diff) == 0.5f && (static_cast<int64_t>(rounded) & 1)) {
+    rounded = v - diff;
+  }
+  return rounded;
+}
+
+double roundeven(double v) {
+  double rounded = std::round(v);
+  double diff = rounded - v;
+  if (std::fabs(diff) == 0.5 && (static_cast<int64_t>(rounded) & 1)) {
+    rounded = v - diff;
+  }
+  return rounded;
+}
+}
 #elif defined(__linux__) || defined(__APPLE__)
 #include <spawn.h>
 #if defined(__APPLE__)
@@ -1373,16 +1396,23 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   // The symlink table matches by longest available prefix in an unspecified
   // order, but every route converges: a generic-prefix hit rewrites the path
   // into the partition form, which then matches the specific file symlink.
+  const auto app_root = rex::filesystem::GetAppRootFolder();
   auto custom_root = std::string(REXCVAR_GET(skate3_custom_bigs_dir));
-  if (custom_root.empty()) {
-    custom_root = (rex::filesystem::GetAppRootFolder() / "custom_bigs").string();
+  std::filesystem::path custom_dir;
+  if (!custom_root.empty()) {
+    custom_dir = std::filesystem::path(custom_root);
+  } else {
+    custom_dir = app_root / "custom_bigs";
+    if (!std::filesystem::exists(custom_dir) && std::filesystem::exists(app_root.parent_path() / "custom_bigs")) {
+      custom_dir = app_root.parent_path() / "custom_bigs";
+    } else if (!std::filesystem::exists(custom_dir) && std::filesystem::exists(app_root.parent_path() / "build" / "custom_bigs")) {
+      custom_dir = app_root.parent_path() / "build" / "custom_bigs";
+    }
   }
-  const auto custom_dir = std::filesystem::path(custom_root);
   std::error_code dir_ec;
   std::filesystem::create_directories(custom_dir, dir_ec);
 
   // Modular Challenge Packs: if custom_packs directory exists, sync them via tools/pack_compositor.py
-  const auto app_root = rex::filesystem::GetAppRootFolder();
   std::filesystem::path packs_dir = app_root / "custom_packs";
   if (!std::filesystem::is_directory(packs_dir)) {
     packs_dir = app_root.parent_path() / "custom_packs";
@@ -1394,8 +1424,13 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
 
   const bool has_packs_dir = std::filesystem::is_directory(packs_dir);
   if (has_packs_dir && std::filesystem::exists(compositor_script)) {
-    const std::string sync_cmd = "python3 '" + compositor_script.string() + "' --packs-dir '" +
-                                 packs_dir.string() + "' --out-dir '" + custom_dir.string() + "'";
+#ifdef _WIN32
+    const std::string py_bin = "python";
+#else
+    const std::string py_bin = "python3";
+#endif
+    const std::string sync_cmd = py_bin + " \"" + compositor_script.string() + "\" --packs-dir \"" +
+                                 packs_dir.string() + "\" --out-dir \"" + custom_dir.string() + "\"";
     REXLOG_INFO("Skate 3 custom packs: checking active packs in {}...", packs_dir.string());
     const int status = std::system(sync_cmd.c_str());
     if (status != 0) {
@@ -1424,11 +1459,16 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
       {"data\\big\\db.big", "db_custom.big", false},
       {"data\\big\\miscboot.big", "miscboot_custom.big", false},
       {"data\\content\\missions.big", "missions_custom.big", false},
-      // Custom OTS map pins: University global locators with a reused
-      // challenge locator moved to the custom spot (analysis/custom/ots_v2).
+      // Custom OTS map pins: District global locators (University, Downtown, Industrial)
       {"data\\content\\global_locators\\BAM\\DIST_University\\"
        "DIST_Univers_[0x0f7a42a9282864ac].rx2",
        "global_locators_univ.rx2", false},
+      {"data\\content\\global_locators\\BAM\\DIST_DownTown\\"
+       "DIST_DownTow_[0x71ff8817a4de4033].rx2",
+       "global_locators_dt.rx2", false},
+      {"data\\content\\global_locators\\BAM\\DIST_Industrial\\"
+       "DIST_Industr_[0xa5cc938d0194a85d].rx2",
+       "global_locators_ind.rx2", false},
       // Official DLC Big Overrides:
       // Danny Way's Hawaiian Dream
       {"dway_park_00000000.big", "dway_park_custom.big", true},

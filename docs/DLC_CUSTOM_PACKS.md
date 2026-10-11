@@ -39,10 +39,15 @@ The compositor automatically routes challenges to their correct destination cont
 
 | District ID(s) | DLC / World Location | Source Archive | Composed Output | Template Challenge |
 | :--- | :--- | :--- | :--- | :--- |
-| `dist_university`, `dist_downtown`, `dist_industrial` | Base Game (Port Carverton) | Disc `db.big`, `missions.big` | `custom_bigs/db_custom.big`, `missions_custom.big`, `global_locators_univ.rx2` | `ots_univ_02` |
+| `dist_university` | University District | Disc `db.big`, `missions.big` | `custom_bigs/db_custom.big`, `missions_custom.big`, `global_locators_univ.rx2` | `ots_univ_02` |
+| `dist_downtown` | Downtown District | Disc `db.big`, `missions.big` | `custom_bigs/db_custom.big`, `missions_custom.big`, `global_locators_dt.rx2` | `ots_univ_02` |
+| `dist_industrial` | Industrial District | Disc `db.big`, `missions.big` | `custom_bigs/db_custom.big`, `missions_custom.big`, `global_locators_ind.rx2` | `ots_univ_02` |
 | `dist_dannyway`, `dist_dwmc`, `dist_dwgh` | Danny Way's Hawaiian Dream | `dway_park_00000000.big` | `custom_bigs/dway_park_custom.big` | `ots_dwmc_01` |
 | `dist_maloof`, `dist_mmcn` | Maloof Money Cup 2010 NYC | `maloof_money_cup_00000000.big` | `custom_bigs/maloof_custom.big` | `ots_mmcn_01` |
 | `dist_artgallery`, `dist_zen`, `dist_play` | San Van Party Pack (Art Gallery & Zen Plaza) | `play_00000000.big` | `custom_bigs/play_custom.big` | `ots_artg_01` |
+
+> [!TIP]
+> **Automatic Locator Assignment**: Pack authors do not need to look up or hardcode internal RenderWare locator strings. If the `"locator"` property is omitted from a spot in `pack.json`, the compositor dynamically detects and binds an available cut or spare locator in the target district or DLC world.
 
 Global text localization strings and camera intro sequences are automatically merged into `custom_bigs/miscboot_custom.big` so challenge titles and descriptions resolve everywhere regardless of detection order.
 
@@ -161,3 +166,5 @@ For complete spot geometry design, arrow unification, runway physics, camera fly
 3. VFS symlinks transparently redirect the guest filesystem calls:
    - Base game: `db.big`, `miscboot.big`, `missions.big`, and `global_locators_univ.rx2`.
    - DLC packages: symlinks are registered across `\Device\Content\1..32\<dlc_big>` and `dlcbig:\<dlc_big>` to intercept guest DLC loads regardless of enumeration order.
+
+For instructions on deploying the Windows build on **Steam Deck** using Proton, see the [Steam Deck Proton Deployment Guide](STEAM_DECK_PROTON.md).
