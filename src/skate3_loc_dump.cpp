@@ -1013,7 +1013,7 @@ extern "C" REX_FUNC(sub_8290C548) {
 //
 // LIVES IN THIS TU (not a new CMake source) deliberately: editing
 // CMakeLists.txt forces a CMake re-configure, which re-runs the TU-package
-// staging (SKATE3_TITLE_UPDATE_PACKAGE, the /tmp/opencode/tu3.xex cache
+// staging (SKATE3_TITLE_UPDATE_PACKAGE, the title update cache
 // entry) — a dependency this machine cannot currently satisfy. Appending
 // here keeps the build incremental (one TU recompiled + relink).
 //
