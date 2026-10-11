@@ -35,4 +35,3 @@ CMakeUserPresets.json
 
 # Local developer scripts (texture decoding, extraction, bootstrap helpers)
 /scripts/
-/custom_packs
