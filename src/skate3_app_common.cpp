@@ -1635,21 +1635,39 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   if (!custom_root.empty()) {
     custom_dir = std::filesystem::path(custom_root);
   } else {
-    custom_dir = app_root / "custom_bigs";
-    if (!std::filesystem::exists(custom_dir) && std::filesystem::exists(app_root.parent_path() / "custom_bigs")) {
-      custom_dir = app_root.parent_path() / "custom_bigs";
-    } else if (!std::filesystem::exists(custom_dir) && std::filesystem::exists(app_root.parent_path() / "build" / "custom_bigs")) {
-      custom_dir = app_root.parent_path() / "build" / "custom_bigs";
+    // Check mods/compiled, then legacy custom_bigs
+    const std::vector<std::filesystem::path> search_paths = {
+        app_root / "mods" / "compiled",
+        app_root.parent_path() / "mods" / "compiled",
+        app_root / "custom_bigs",
+        app_root.parent_path() / "custom_bigs",
+        app_root.parent_path() / "build" / "custom_bigs",
+    };
+    for (const auto& sp : search_paths) {
+      if (std::filesystem::exists(sp)) {
+        custom_dir = sp;
+        break;
+      }
+    }
+    if (custom_dir.empty()) {
+      custom_dir = app_root / "mods" / "compiled";
     }
   }
   std::error_code dir_ec;
   std::filesystem::create_directories(custom_dir, dir_ec);
 
-  // Modular Challenge Packs: if custom_packs directory exists, sync them via tools/pack_compositor.py
-  std::filesystem::path packs_dir = app_root / "custom_packs";
+  // Raw Mod Packages: check mods/raw then legacy custom_packs
+  std::filesystem::path packs_dir = app_root / "mods" / "raw";
+  if (!std::filesystem::is_directory(packs_dir)) {
+    packs_dir = app_root.parent_path() / "mods" / "raw";
+  }
+  if (!std::filesystem::is_directory(packs_dir)) {
+    packs_dir = app_root / "custom_packs";
+  }
   if (!std::filesystem::is_directory(packs_dir)) {
     packs_dir = app_root.parent_path() / "custom_packs";
   }
+
   std::filesystem::path compositor_script = app_root.parent_path() / "tools" / "pack_compositor.py";
   if (!std::filesystem::exists(compositor_script)) {
     compositor_script = app_root / "tools" / "pack_compositor.py";
@@ -1657,23 +1675,69 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
 
   const bool has_packs_dir = std::filesystem::is_directory(packs_dir);
   if (has_packs_dir && std::filesystem::exists(compositor_script)) {
+    std::string py_bin;
 #ifdef _WIN32
-    const std::string py_bin = "python";
+    if (std::system("python --version >nul 2>&1") == 0) {
+      py_bin = "python";
+    } else {
+      const std::vector<std::filesystem::path> local_pythons = {
+          app_root / "tools" / "python" / "python.exe",
+          app_root.parent_path() / "tools" / "python" / "python.exe",
+          app_root / "mods" / ".python" / "python.exe",
+      };
+      for (const auto& lp : local_pythons) {
+        if (std::filesystem::exists(lp)) {
+          py_bin = "\"" + lp.string() + "\"";
+          break;
+        }
+      }
+      if (py_bin.empty()) {
+        REXLOG_INFO("Skate 3 mods: Python not detected. Attempting to download portable Python runtime...");
+        const auto target_py_dir = app_root / "tools" / "python";
+        std::filesystem::create_directories(target_py_dir, dir_ec);
+        const auto zip_dest = target_py_dir / "python-embed.zip";
+        const std::string py_url = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip";
+        const std::string dl_cmd = "curl -s -L -f -o \"" + zip_dest.string() + "\" \"" + py_url + "\"";
+        REXLOG_INFO("Skate 3 mods: Downloading portable Python from {}...", py_url);
+        int dl_status = std::system(dl_cmd.c_str());
+        if (dl_status == 0 && std::filesystem::exists(zip_dest) && std::filesystem::file_size(zip_dest) > 1000000) {
+          const std::string unpack_cmd = "tar -xf \"" + zip_dest.string() + "\" -C \"" + target_py_dir.string() + "\"";
+          int unpack_status = std::system(unpack_cmd.c_str());
+          std::filesystem::remove(zip_dest, dir_ec);
+          if (unpack_status == 0 && std::filesystem::exists(target_py_dir / "python.exe")) {
+            REXLOG_INFO("Skate 3 mods: Portable Python ready in {}", target_py_dir.string());
+            py_bin = "\"" + (target_py_dir / "python.exe").string() + "\"";
+          }
+        }
+        if (py_bin.empty()) {
+          REXLOG_WARN("Skate 3 mods: Portable Python download unavailable/offline. Skipping dynamic mod compilation.");
+        }
+      }
+    }
 #else
-    const std::string py_bin = "python3";
+    if (std::system("python3 --version >/dev/null 2>&1") == 0) {
+      py_bin = "python3";
+    } else if (std::system("python --version >/dev/null 2>&1") == 0) {
+      py_bin = "python";
+    } else {
+      REXLOG_WARN("Skate 3 mods: Python not found on system PATH. Skipping dynamic mod compilation.");
+    }
 #endif
-    const std::string sync_cmd = py_bin + " \"" + compositor_script.string() + "\" --packs-dir \"" +
-                                 packs_dir.string() + "\" --out-dir \"" + custom_dir.string() + "\"";
-    REXLOG_INFO("Skate 3 custom packs: checking active packs in {}...", packs_dir.string());
-    const int status = std::system(sync_cmd.c_str());
-    if (status != 0) {
-      REXLOG_WARN("Skate 3 custom packs: compositor sync returned status {}", status);
+
+    if (!py_bin.empty()) {
+      const std::string sync_cmd = py_bin + " \"" + compositor_script.string() + "\" --packs-dir \"" +
+                                   packs_dir.string() + "\" --out-dir \"" + custom_dir.string() + "\"";
+      REXLOG_INFO("Skate 3 mods: syncing raw packs in {}...", packs_dir.string());
+      const int status = std::system(sync_cmd.c_str());
+      if (status != 0) {
+        REXLOG_WARN("Skate 3 mods: compositor sync returned status {}", status);
+      }
     }
   }
 
   // If modular custom packs are in use, only mount overrides when at least one pack is active.
   if (has_packs_dir && !std::filesystem::exists(custom_dir / ".active")) {
-    REXLOG_INFO("Skate 3 custom packs: no active challenge packs, using stock retail data");
+    REXLOG_INFO("Skate 3 mods: no active challenge packs, using stock retail data");
     return;
   }
 
@@ -1753,6 +1817,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
       if (ec) break;
       if (entry.is_regular_file() && entry.path().filename() == filename) {
         if (entry.path().string().find("custom_bigs") == std::string::npos &&
+            entry.path().string().find("mods") == std::string::npos &&
             std::filesystem::file_size(entry.path()) > 0) {
           return entry.path();
         }
@@ -1764,6 +1829,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
       if (ec) break;
       if (entry.is_regular_file() && entry.path().filename() == filename) {
         if (entry.path().string().find("custom_bigs") == std::string::npos &&
+            entry.path().string().find("mods") == std::string::npos &&
             std::filesystem::file_size(entry.path()) > 0) {
           return entry.path();
         }
@@ -1777,35 +1843,39 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   auto* fs = runtime()->file_system();
   std::vector<std::pair<std::string, std::string>> active_dlc_mappings;
   for (const auto& mapping : kMappings) {
+    std::filesystem::path mod_path = custom_dir / mapping.host_file;
+    mod_path.replace_extension(".mod");
     std::filesystem::path delta_path = custom_dir / mapping.host_file;
     delta_path.replace_extension(".delta");
     const auto big_path = custom_dir / mapping.host_file;
 
-    const bool use_delta = std::filesystem::exists(delta_path);
-    const bool use_big = !use_delta && std::filesystem::exists(big_path);
+    const bool use_mod = std::filesystem::exists(mod_path);
+    const bool use_delta = !use_mod && std::filesystem::exists(delta_path);
+    const bool use_big = !use_mod && !use_delta && std::filesystem::exists(big_path);
 
-    if (!use_delta && !use_big) {
-      REXLOG_WARN("Skate 3 custom bigs: {} not found (neither delta nor big), skipped",
+    if (!use_mod && !use_delta && !use_big) {
+      REXLOG_WARN("Skate 3 mods: {} not found (neither .mod, .delta nor .big), skipped",
                   mapping.host_file);
       continue;
     }
 
-    if (use_delta) {
-      auto delta_data = LoadDeltaOverlay(delta_path);
+    if (use_mod || use_delta) {
+      const auto overlay_path = use_mod ? mod_path : delta_path;
+      auto delta_data = LoadDeltaOverlay(overlay_path);
       if (delta_data) {
         delta_data->stock_path =
             find_stock_file(mapping.guest_subpath, mapping.is_dlc_big, delta_data->base_name);
         if (delta_data->stock_path.empty() && delta_data->base_size > 0) {
-          REXLOG_ERROR("Skate 3 custom bigs: stock base file not found for delta: {}",
-                       delta_path.string());
+          REXLOG_ERROR("Skate 3 mods: stock base file not found for overlay: {}",
+                       overlay_path.string());
           continue;
         }
-        REXLOG_INFO("Skate 3 custom bigs: DELTA OVERLAY active: {} (base={})",
-                    delta_path.filename().string(), delta_data->stock_path.string());
+        REXLOG_INFO("Skate 3 mods: MOD OVERLAY active: {} (base={})",
+                    overlay_path.filename().string(), delta_data->stock_path.string());
         device->RegisterDeltaEntry(mapping.host_file, delta_data);
-        device->RegisterDeltaEntry(delta_path.filename().string(), delta_data);
+        device->RegisterDeltaEntry(overlay_path.filename().string(), delta_data);
       } else {
-        REXLOG_ERROR("Skate 3 custom bigs: failed to load delta: {}", delta_path.string());
+        REXLOG_ERROR("Skate 3 mods: failed to load mod overlay: {}", overlay_path.string());
         continue;
       }
     }
@@ -1843,8 +1913,8 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     }
 
     ++installed;
-    REXLOG_INFO("Skate 3 custom bigs: {} -> {} ({})", mapping.guest_subpath, target,
-                use_delta ? "DELTA OVERLAY" : "HOST BIG");
+    REXLOG_INFO("Skate 3 mods: {} -> {} ({})", mapping.guest_subpath, target,
+                use_mod ? "MOD OVERLAY" : (use_delta ? "DELTA OVERLAY" : "HOST BIG"));
   }
 
   if (!active_dlc_mappings.empty() && runtime()->kernel_state() &&

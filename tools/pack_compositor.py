@@ -45,8 +45,37 @@ from decrypt import game_refpack_decode  # noqa: E402
 STOCK_DATA = REPO_ROOT / 'Skate3+DLC' / 'Skate 3' / 'data'
 STOCK_BIGS_DIR = REPO_ROOT / 'build' / 'stock_bigs'
 LOCAL_SHARE_DLC = Path.home() / '.local' / 'share' / 'skate3' / '0000000000000000' / '454108E6' / '00000002'
-DEFAULT_PACKS_DIR = REPO_ROOT / 'custom_packs'
-DEFAULT_OUT_DIR = REPO_ROOT / 'build' / 'custom_bigs'
+
+DEFAULT_PACKS_DIR = REPO_ROOT / 'mods' / 'raw' if (REPO_ROOT / 'mods' / 'raw').exists() else REPO_ROOT / 'custom_packs'
+DEFAULT_OUT_DIR = REPO_ROOT / 'mods' / 'compiled' if (REPO_ROOT / 'mods' / 'compiled').exists() else REPO_ROOT / 'build' / 'custom_bigs'
+
+
+def find_stock_data():
+    candidates = [
+        REPO_ROOT / 'game' / 'data',
+        REPO_ROOT / 'data',
+        REPO_ROOT / 'Skate3+DLC' / 'Skate 3' / 'data',
+    ]
+    for c in candidates:
+        if c.exists() and (c / 'big' / 'db.big').exists():
+            return c
+    return STOCK_DATA
+
+
+def find_stock_dlc_big(big_name, folder_id):
+    candidates = [
+        STOCK_BIGS_DIR / big_name,
+        REPO_ROOT / 'dlc' / folder_id / big_name,
+        REPO_ROOT / 'dlc' / big_name,
+        REPO_ROOT / 'game' / 'dlc' / folder_id / big_name,
+        REPO_ROOT / 'game' / 'dlc' / big_name,
+        LOCAL_SHARE_DLC / folder_id / big_name,
+    ]
+    for c in candidates:
+        if c.exists() and c.stat().st_size > 0:
+            return c
+    return None
+
 
 KF = ['data/db/challenge_local_data', 'data/db/challenge_stategraphs', 'data/db/challenge_stategraph']
 TEMPLATE = 'ots_univ_02'
@@ -1286,14 +1315,15 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
                 stream_entry.ctype = 0
                 stream_entry.modified = True
 
-    # Write out delta
-    delta_name = cfg['custom_big'].replace('.big', '.delta')
-    delta_path = out_dir / delta_name
-    bigfile.write_delta(b, delta_path, stock_path)
-    legacy_big = out_dir / cfg['custom_big']
-    if legacy_big.exists():
-        legacy_big.unlink()
-    print(f"  + Wrote {delta_name} ({os.path.getsize(delta_path)} bytes, {len(spots)} spot(s))")
+    # Write out .mod overlay
+    mod_name = cfg['custom_big'].replace('.big', '.mod')
+    mod_path = out_dir / mod_name
+    bigfile.write_delta(b, mod_path, stock_path)
+    for ext in ('.big', '.delta'):
+        old = out_dir / cfg['custom_big'].replace('.big', ext)
+        if old.exists():
+            old.unlink()
+    print(f"  + Wrote {mod_name} ({os.path.getsize(mod_path)} bytes, {len(spots)} spot(s))")
 
 
 def discover_packs(packs_dir):
@@ -1330,75 +1360,88 @@ def discover_packs(packs_dir):
     return packs
 
 
-def compute_packs_state(enabled_packs):
+def hash_raw_pack(p):
+    """Compute deterministic hash for a single raw mod manifest + mission files."""
     hasher = hashlib.sha256()
-    for p in enabled_packs:
-        hasher.update(p['id'].encode('utf-8'))
-        try:
-            hasher.update(p['manifest_file'].read_bytes())
-        except Exception:
-            pass
-        # include mtimes of any missions files
-        missions_dir = p['path'] / 'missions'
-        if missions_dir.is_dir():
-            for f in sorted(missions_dir.rglob('*')):
-                if f.is_file():
-                    hasher.update(f.name.encode('utf-8'))
-                    hasher.update(struct.pack('>Q', int(f.stat().st_mtime)))
+    hasher.update(p['id'].encode('utf-8'))
+    try:
+        hasher.update(p['manifest_file'].read_bytes())
+    except Exception:
+        pass
+    missions_dir = p['path'] / 'missions'
+    if missions_dir.is_dir():
+        for f in sorted(missions_dir.rglob('*')):
+            if f.is_file():
+                hasher.update(f.name.encode('utf-8'))
+                hasher.update(struct.pack('>Q', int(f.stat().st_mtime)))
+                hasher.update(struct.pack('>Q', f.stat().st_size))
+    return hasher.hexdigest()
+
+
+def compute_target_hash(spots, pack_hashes):
+    """Compute composite hash for all spots assigned to a target container."""
+    hasher = hashlib.sha256()
+    for s in sorted(spots, key=lambda x: str(x.get('id', ''))):
+        hasher.update(json.dumps(s, sort_keys=True).encode('utf-8'))
+        pack_id = s.get('pack_id', '')
+        if pack_id in pack_hashes:
+            hasher.update(pack_hashes[pack_id].encode('utf-8'))
     return hasher.hexdigest()
 
 
 def restore_stock_retail(out_dir):
-    """Restore build/custom_bigs: clean up all overrides so game runs 100% stock."""
+    """Restore mods/compiled: clean up all overrides so game runs 100% stock."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    cleanup_names = [
-        'db_custom.delta', 'db_custom.big',
-        'miscboot_custom.delta', 'miscboot_custom.big',
-        'missions_custom.delta', 'missions_custom.big',
-        'presell_custom.delta', 'presell_custom.big',
+    cleanup_bases = [
+        'db_custom', 'miscboot_custom', 'missions_custom', 'presell_custom'
     ]
     for cfg in DLC_CONFIGS.values():
-        cleanup_names.append(cfg['custom_big'])
-        cleanup_names.append(cfg['custom_big'].replace('.big', '.delta'))
-    for name in cleanup_names:
-        p = out_dir / name
-        if p.exists():
-            p.unlink()
+        cleanup_bases.append(cfg['custom_big'].replace('.big', ''))
+
+    for base in cleanup_bases:
+        for ext in ('.mod', '.delta', '.big'):
+            p = out_dir / f"{base}{ext}"
+            if p.exists():
+                p.unlink()
+
     for dcfg in BASE_DISTRICT_CONFIGS.values():
         rx_out = out_dir / dcfg['rx2_out']
         if rx_out.exists():
             rx_out.unlink()
+
     active_marker = out_dir / '.active'
     if active_marker.exists():
         active_marker.unlink()
-    state_file = out_dir / '.pack_state.json'
-    with open(state_file, 'w', encoding='utf-8') as f:
-        json.dump({'active_packs': [], 'active_count': 0, 'state_hash': 'STOCK'}, f, indent=2)
-    print("Cleaned custom bigs: 0 custom packs active. Game runs pure stock retail data.")
+
+    for sf_name in ('.mod_state.json', '.pack_state.json'):
+        sf = out_dir / sf_name
+        with open(sf, 'w', encoding='utf-8') as f:
+            json.dump({'active_packs': [], 'active_count': 0, 'state_hash': 'STOCK', 'targets': {}}, f, indent=2)
+    print("Cleaned mods/compiled: 0 custom packs active. Game runs pure stock retail data.")
 
 
 def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
+    global STOCK_DATA
+    STOCK_DATA = find_stock_data()
+
+    packs_dir = Path(packs_dir)
+    out_dir = Path(out_dir)
+
     all_packs = discover_packs(packs_dir)
     enabled_packs = [p for p in all_packs if p['enabled']]
-    state_file = out_dir / '.pack_state.json'
-
-    current_state_hash = compute_packs_state(enabled_packs)
-
-    if not force and state_file.exists():
-        try:
-            with open(state_file, 'r', encoding='utf-8') as f:
-                saved_state = json.load(f)
-            if saved_state.get('state_hash') == current_state_hash:
-                print(f"Custom packs are up to date ({len(enabled_packs)} active packs).")
-                return 0
-        except Exception:
-            pass
+    state_file = out_dir / '.mod_state.json'
+    legacy_state_file = out_dir / '.pack_state.json'
 
     if not enabled_packs:
         restore_stock_retail(out_dir)
         return 0
 
-    print(f"Composing {len(enabled_packs)} custom challenge pack(s)...")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Compute per-pack hashes
+    pack_hashes = {p['id']: hash_raw_pack(p) for p in enabled_packs}
+
+    # 2. Collect spots and group by target container
     all_spots = []
     pack_dirs_by_spot = {}
     seen_spot_ids = set()
@@ -1406,8 +1449,8 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
     spots_by_target = collections.defaultdict(list)
 
     for p in enabled_packs:
-        print(f"  + Pack: {p['name']} v{p['version']} ({len(p['spots'])} spots)")
         for s in p['spots']:
+            s['pack_id'] = p['id']
             num = s.get('num', 1)
             dist = get_spot_district(s)
             dist_cfg = BASE_DISTRICT_CONFIGS.get(dist, BASE_DISTRICT_CONFIGS['dist_university'])
@@ -1425,84 +1468,154 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
             target = get_spot_target(s)
             spots_by_target[target].append(s)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Base game disc bigs (University / Downtown / Industrial)
-    base_spots = spots_by_target.get('base', [])
-    if base_spots:
-        resolve_base_locators(base_spots)
-        stock_db = STOCK_DATA / 'big' / 'db.big'
-        print(f"Building db_custom.delta ({len(base_spots)} base challenge(s))...")
-        db = bigfile.read(stock_db, KF)
-        build_db(db, base_spots)
-        bigfile.write_delta(db, out_dir / 'db_custom.delta', stock_db)
-        if (out_dir / 'db_custom.big').exists():
-            (out_dir / 'db_custom.big').unlink()
-
-        stock_mb = STOCK_DATA / 'content' / 'missions.big'
-        print(f"Building missions_custom.delta ({len(base_spots)} base challenge(s))...")
-        mb = bigfile.read(stock_mb)
-        build_missions(mb, base_spots, pack_dirs_by_spot)
-        bigfile.write_delta(mb, out_dir / 'missions_custom.delta', stock_mb)
-        if (out_dir / 'missions_custom.big').exists():
-            (out_dir / 'missions_custom.big').unlink()
-
-        print("Building district global locators...")
-        build_rx2(out_dir, base_spots)
-    else:
-        for name in ['db_custom.delta', 'db_custom.big', 'missions_custom.delta', 'missions_custom.big']:
-            p = out_dir / name
-            if p.exists():
-                p.unlink()
-        for dcfg in BASE_DISTRICT_CONFIGS.values():
-            rx_out = out_dir / dcfg['rx2_out']
-            if rx_out.exists():
-                rx_out.unlink()
-
-    # 2. Official DLC Bigs
-    for dlc_id, cfg in DLC_CONFIGS.items():
-        dlc_spots = spots_by_target.get(dlc_id, [])
-        custom_big_path = out_dir / cfg['custom_big']
-        custom_delta_path = out_dir / cfg['custom_big'].replace('.big', '.delta')
-        if dlc_spots:
-            build_dlc_big(dlc_id, cfg, dlc_spots, pack_dirs_by_spot, out_dir)
+    # 3. Compute per-target composite hashes
+    current_target_hashes = {}
+    all_targets = ['base'] + list(DLC_CONFIGS.keys())
+    for target in all_targets:
+        t_spots = spots_by_target.get(target, [])
+        if t_spots:
+            current_target_hashes[target] = compute_target_hash(t_spots, pack_hashes)
         else:
-            if custom_delta_path.exists():
-                custom_delta_path.unlink()
-            if custom_big_path.exists():
-                custom_big_path.unlink()
+            current_target_hashes[target] = None
+    current_target_hashes['miscboot'] = compute_target_hash(all_spots, pack_hashes)
 
-    # 3. Global Localization & Scene intros (miscboot_custom.delta)
-    print("Building miscboot_custom.delta (all challenges)...")
-    stock_misc = STOCK_DATA / 'big' / 'miscboot.big'
-    misc = bigfile.read(stock_misc)
-    build_loc(misc, all_spots)
-    bigfile.write_delta(misc, out_dir / 'miscboot_custom.delta', stock_misc)
-    if (out_dir / 'miscboot_custom.big').exists():
-        (out_dir / 'miscboot_custom.big').unlink()
+    # 4. Compare with saved state to determine dirty targets
+    saved_targets = {}
+    target_state_file = state_file if state_file.exists() else legacy_state_file
+    if target_state_file.exists():
+        try:
+            with open(target_state_file, 'r', encoding='utf-8') as f:
+                saved_state = json.load(f)
+            saved_targets = saved_state.get('targets', {})
+        except Exception:
+            saved_targets = {}
 
-    # Mark active state
+    dirty_targets = set()
+    if force:
+        dirty_targets = set(all_targets) | {'miscboot'}
+    else:
+        for target in all_targets:
+            t_spots = spots_by_target.get(target, [])
+            if t_spots:
+                # Check if hash changed
+                if saved_targets.get(target) != current_target_hashes[target]:
+                    dirty_targets.add(target)
+                else:
+                    # Check if output file exists on disk
+                    if target == 'base':
+                        if not (out_dir / 'db_custom.mod').exists() or not (out_dir / 'missions_custom.mod').exists():
+                            dirty_targets.add('base')
+                    else:
+                        cfg = DLC_CONFIGS[target]
+                        mod_file = out_dir / cfg['custom_big'].replace('.big', '.mod')
+                        if not mod_file.exists():
+                            dirty_targets.add(target)
+            else:
+                # Target has no spots: clean up if leftover
+                if target == 'base':
+                    for name in ['db_custom', 'missions_custom']:
+                        for ext in ('.mod', '.delta', '.big'):
+                            p = out_dir / f"{name}{ext}"
+                            if p.exists():
+                                p.unlink()
+                    for dcfg in BASE_DISTRICT_CONFIGS.values():
+                        rx_out = out_dir / dcfg['rx2_out']
+                        if rx_out.exists():
+                            rx_out.unlink()
+                else:
+                    cfg = DLC_CONFIGS[target]
+                    for ext in ('.mod', '.delta', '.big'):
+                        p = out_dir / cfg['custom_big'].replace('.big', ext)
+                        if p.exists():
+                            p.unlink()
+
+        # If any container changed or miscboot.mod missing, miscboot is dirty
+        if dirty_targets or not (out_dir / 'miscboot_custom.mod').exists() or saved_targets.get('miscboot') != current_target_hashes['miscboot']:
+            dirty_targets.add('miscboot')
+
+    # If nothing is dirty and sentinel exists, we are done in < 5ms!
+    if not dirty_targets and (out_dir / '.active').exists():
+        print(f"All {len(enabled_packs)} mod(s) are up to date in {out_dir.name}.")
+        return 0
+
+    print(f"Composing {len(enabled_packs)} custom mod pack(s) (targets to build: {', '.join(sorted(dirty_targets))})...")
+    for p in enabled_packs:
+        print(f"  + Pack: {p['name']} v{p['version']} ({len(p['spots'])} spots)")
+
+    # 5. Build Base Game Container
+    if 'base' in dirty_targets:
+        base_spots = spots_by_target.get('base', [])
+        if base_spots:
+            resolve_base_locators(base_spots)
+            stock_db = STOCK_DATA / 'big' / 'db.big'
+            print(f"Building db_custom.mod ({len(base_spots)} base challenge(s))...")
+            db = bigfile.read(stock_db, KF)
+            build_db(db, base_spots)
+            bigfile.write_delta(db, out_dir / 'db_custom.mod', stock_db)
+            for ext in ('.big', '.delta'):
+                old = out_dir / f'db_custom{ext}'
+                if old.exists():
+                    old.unlink()
+
+            stock_mb = STOCK_DATA / 'content' / 'missions.big'
+            print(f"Building missions_custom.mod ({len(base_spots)} base challenge(s))...")
+            mb = bigfile.read(stock_mb)
+            build_missions(mb, base_spots, pack_dirs_by_spot)
+            bigfile.write_delta(mb, out_dir / 'missions_custom.mod', stock_mb)
+            for ext in ('.big', '.delta'):
+                old = out_dir / f'missions_custom{ext}'
+                if old.exists():
+                    old.unlink()
+
+            print("Building district global locators...")
+            build_rx2(out_dir, base_spots)
+
+    # 6. Build Official DLC Containers
+    for dlc_id, cfg in DLC_CONFIGS.items():
+        if dlc_id in dirty_targets:
+            dlc_spots = spots_by_target.get(dlc_id, [])
+            if dlc_spots:
+                build_dlc_big(dlc_id, cfg, dlc_spots, pack_dirs_by_spot, out_dir)
+
+    # 7. Build Global Localization & Intro Cameras (miscboot_custom.mod)
+    if 'miscboot' in dirty_targets:
+        print(f"Building miscboot_custom.mod ({len(all_spots)} total challenges)...")
+        stock_misc = STOCK_DATA / 'big' / 'miscboot.big'
+        misc = bigfile.read(stock_misc)
+        build_loc(misc, all_spots)
+        bigfile.write_delta(misc, out_dir / 'miscboot_custom.mod', stock_misc)
+        for ext in ('.big', '.delta'):
+            old = out_dir / f'miscboot_custom{ext}'
+            if old.exists():
+                old.unlink()
+
+    # 8. Mark active state and save composite hashes
     (out_dir / '.active').touch()
+    new_state = {
+        'version': 2,
+        'active_packs': [p['id'] for p in enabled_packs],
+        'active_count': len(enabled_packs),
+        'spots_count': len(all_spots),
+        'targets': current_target_hashes
+    }
     with open(state_file, 'w', encoding='utf-8') as f:
-        json.dump({
-            'active_packs': [p['id'] for p in enabled_packs],
-            'active_count': len(enabled_packs),
-            'spots_count': len(all_spots),
-            'state_hash': current_state_hash
-        }, f, indent=2)
+        json.dump(new_state, f, indent=2)
+    with open(legacy_state_file, 'w', encoding='utf-8') as f:
+        json.dump(new_state, f, indent=2)
 
     print(f"Successfully composed {len(enabled_packs)} pack(s) with {len(all_spots)} challenge(s).")
     return 0
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Compose custom challenge packs into recomp custom bigs.")
-    ap.add_argument('--packs-dir', default=str(DEFAULT_PACKS_DIR), help="Directory containing custom packs")
-    ap.add_argument('--out-dir', default=str(DEFAULT_OUT_DIR), help="Output custom_bigs directory")
-    ap.add_argument('--force', action='store_true', help="Force recomposition even if state hash matches")
+    ap = argparse.ArgumentParser(description="Compose raw challenge packs into .mod binaries.")
+    ap.add_argument('--packs-dir', default=str(DEFAULT_PACKS_DIR), help="Directory containing raw mod packs (mods/raw)")
+    ap.add_argument('--out-dir', default=str(DEFAULT_OUT_DIR), help="Output compiled mods directory (mods/compiled)")
+    ap.add_argument('--force', action='store_true', help="Force recomposition even if state hashes match")
     a = ap.parse_args()
     return compose(Path(a.packs_dir), Path(a.out_dir), a.force)
 
 
 if __name__ == '__main__':
     sys.exit(main() or 0)
+

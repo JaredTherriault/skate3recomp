@@ -132,23 +132,19 @@ def main():
     DIST_DIR.mkdir(exist_ok=True)
 
     extra_files = []
-    for folder in ['custom_packs', 'tools']:
+    for folder in ['mods/raw', 'tools']:
         fdir = REPO_ROOT / folder
-        if fdir.is_dir():
+        if fdir.is_dir() and not fdir.is_symlink():
             for p in fdir.rglob('*'):
                 if p.is_file() and not p.name.startswith('.') and p.suffix not in ('.pyc', '.pyo') and '__pycache__' not in p.parts:
                     rel = p.relative_to(REPO_ROOT)
                     extra_files.append((p, str(rel)))
 
-    custom_bigs_dir = BUILD_DIR / 'custom_bigs'
-    if not custom_bigs_dir.exists():
-        custom_bigs_dir = REPO_ROOT / 'custom_bigs'
-    if custom_bigs_dir.is_dir():
-        for p in custom_bigs_dir.rglob('*'):
-            if p.is_file() and not p.name.endswith('.big') and '__pycache__' not in p.parts:
-                rel = p.relative_to(custom_bigs_dir)
-                extra_files.append((p, f"custom_bigs/{rel}"))
-
+    compiled_dir = REPO_ROOT / 'mods' / 'compiled'
+    compiled_dir.mkdir(parents=True, exist_ok=True)
+    keep = compiled_dir / '.gitkeep'
+    keep.touch()
+    extra_files.append((keep, 'mods/compiled/.gitkeep'))
     # Step 3: Package Linux Archive (Skate3Recomp-Linux.zip)
     linux_zip = DIST_DIR / 'Skate3Recomp-Linux.zip'
     linux_files = [

@@ -43,3 +43,7 @@ CMakeUserPresets.json
 __pycache__/
 *.pyc
 *.pyo
+
+/mods/compiled/*
+!/mods/compiled/.gitkeep
+

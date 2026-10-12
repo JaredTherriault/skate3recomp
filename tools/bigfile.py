@@ -394,3 +394,8 @@ def write_delta(b, delta_path, stock_path=None):
 
     Path(delta_path).write_bytes(out)
     return len(out)
+
+
+# Alias for .mod format
+write_mod = write_delta
+
