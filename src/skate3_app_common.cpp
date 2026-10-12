@@ -117,12 +117,16 @@ REXCVAR_DEFINE_STRING(skate3_dlc_root, "", "Skate 3",
                       "Directory containing Skate 3 DLC package files");
 REXCVAR_DEFINE_BOOL(skate3_auto_install_dlc, true, "Skate 3",
                     "Install DLC package files found in configured DLC folders");
-REXCVAR_DEFINE_BOOL(skate3_mods, false, "Skate 3",
+REXCVAR_DEFINE_BOOL(skate3_mods, true, "Skate 3",
                     "Serve override mod files from skate3_mods_dir through "
                     "VFS symlinks, without modifying the game tree.");
 REXCVAR_DEFINE_STRING(skate3_mods_dir, "", "Skate 3",
                       "Directory holding compiled mod files (.mod) "
                       "(empty = <app root>/mods/compiled).");
+REXCVAR_DEFINE_BOOL(skate3_custom_bigs, true, "Skate 3",
+                    "Legacy alias for skate3_mods.");
+REXCVAR_DEFINE_STRING(skate3_custom_bigs_dir, "", "Skate 3",
+                      "Legacy alias for skate3_mods_dir.");
 REXCVAR_DEFINE_BOOL(skate3_ultrawide, false, "Skate 3",
                     "Ultrawide display support: the native renderer draws true widescreen "
                     "frames at the host display aspect (requires the native renderer; the "
@@ -965,11 +969,22 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   auto load_mods = [this]() -> std::vector<rex::ui::SimpleModInfo> {
     std::vector<rex::ui::SimpleModInfo> result;
     const auto app_root = rex::filesystem::GetAppRootFolder();
-    auto packs_dir = app_root / "mods" / "raw";
-    if (!std::filesystem::is_directory(packs_dir)) {
-      packs_dir = app_root.parent_path() / "mods" / "raw";
+    const std::vector<std::filesystem::path> candidate_pack_dirs = {
+        app_root / "mods" / "raw",
+        app_root.parent_path() / "mods" / "raw",
+        app_root / "custom_packs",
+        app_root.parent_path() / "custom_packs",
+        app_root.parent_path() / "build" / "custom_packs",
+        app_root / "build" / "custom_packs",
+    };
+    std::filesystem::path packs_dir;
+    for (const auto& cpd : candidate_pack_dirs) {
+      if (std::filesystem::is_directory(cpd)) {
+        packs_dir = cpd;
+        break;
+      }
     }
-    if (!std::filesystem::is_directory(packs_dir)) {
+    if (packs_dir.empty() || !std::filesystem::is_directory(packs_dir)) {
       return result;
     }
     std::error_code ec;
@@ -1005,11 +1020,22 @@ void Skate3BaseApp::ToggleSimpleSettings() {
 
   auto save_mods = [this](const std::vector<rex::ui::SimpleModInfo>& mods) {
     const auto app_root = rex::filesystem::GetAppRootFolder();
-    auto packs_dir = app_root / "mods" / "raw";
-    if (!std::filesystem::is_directory(packs_dir)) {
-      packs_dir = app_root.parent_path() / "mods" / "raw";
+    const std::vector<std::filesystem::path> candidate_pack_dirs = {
+        app_root / "mods" / "raw",
+        app_root.parent_path() / "mods" / "raw",
+        app_root / "custom_packs",
+        app_root.parent_path() / "custom_packs",
+        app_root.parent_path() / "build" / "custom_packs",
+        app_root / "build" / "custom_packs",
+    };
+    std::filesystem::path packs_dir;
+    for (const auto& cpd : candidate_pack_dirs) {
+      if (std::filesystem::is_directory(cpd)) {
+        packs_dir = cpd;
+        break;
+      }
     }
-    if (!std::filesystem::is_directory(packs_dir)) {
+    if (packs_dir.empty() || !std::filesystem::is_directory(packs_dir)) {
       return;
     }
     for (const auto& mod : mods) {
@@ -1613,12 +1639,16 @@ void Skate3BaseApp::InstallModOverrides() {
   if (mods_installed_ || !runtime() || !runtime()->file_system()) {
     return;
   }
-  if (!REXCVAR_GET(skate3_mods)) {
+  if (!REXCVAR_GET(skate3_mods) || !REXCVAR_GET(skate3_custom_bigs)) {
+    REXLOG_INFO("Skate 3 mods: disabled via cvar");
     return;
   }
 
   const auto app_root = rex::filesystem::GetAppRootFolder();
   auto custom_root = std::string(REXCVAR_GET(skate3_mods_dir));
+  if (custom_root.empty()) {
+    custom_root = std::string(REXCVAR_GET(skate3_custom_bigs_dir));
+  }
   std::filesystem::path custom_dir;
   if (!custom_root.empty()) {
     custom_dir = std::filesystem::path(custom_root);
@@ -1626,6 +1656,10 @@ void Skate3BaseApp::InstallModOverrides() {
     const std::vector<std::filesystem::path> search_paths = {
         app_root / "mods" / "compiled",
         app_root.parent_path() / "mods" / "compiled",
+        app_root / "custom_bigs",
+        app_root.parent_path() / "custom_bigs",
+        app_root.parent_path() / "build" / "custom_bigs",
+        app_root / "build" / "custom_bigs",
     };
     for (const auto& sp : search_paths) {
       if (std::filesystem::exists(sp)) {
@@ -1641,9 +1675,23 @@ void Skate3BaseApp::InstallModOverrides() {
   std::filesystem::create_directories(custom_dir, dir_ec);
 
   // Raw Mod Packages
-  std::filesystem::path packs_dir = app_root / "mods" / "raw";
-  if (!std::filesystem::is_directory(packs_dir)) {
-    packs_dir = app_root.parent_path() / "mods" / "raw";
+  const std::vector<std::filesystem::path> candidate_pack_dirs = {
+      app_root / "mods" / "raw",
+      app_root.parent_path() / "mods" / "raw",
+      app_root / "custom_packs",
+      app_root.parent_path() / "custom_packs",
+      app_root.parent_path() / "build" / "custom_packs",
+      app_root / "build" / "custom_packs",
+  };
+  std::filesystem::path packs_dir;
+  for (const auto& cpd : candidate_pack_dirs) {
+    if (std::filesystem::is_directory(cpd)) {
+      packs_dir = cpd;
+      break;
+    }
+  }
+  if (packs_dir.empty()) {
+    packs_dir = app_root / "mods" / "raw";
   }
 
   std::filesystem::path compositor_script = app_root.parent_path() / "tools" / "pack_compositor.py";
@@ -1762,6 +1810,9 @@ void Skate3BaseApp::InstallModOverrides() {
                 custom_dir.string());
     return;
   }
+  auto legacy_device = std::make_unique<LoggingOverrideDevice>(
+      "skate3custombigs:", custom_dir);
+  const bool has_legacy_device = legacy_device->Initialize();
 
   auto find_stock_file = [&](const std::string_view guest_subpath, bool is_dlc_big,
                              const std::string& base_hint) -> std::filesystem::path {
@@ -1794,7 +1845,8 @@ void Skate3BaseApp::InstallModOverrides() {
     for (const auto& entry : std::filesystem::recursive_directory_iterator(user_root, ec)) {
       if (ec) break;
       if (entry.is_regular_file() && entry.path().filename() == filename) {
-        if (entry.path().string().find("mods") == std::string::npos &&
+        if (entry.path().string().find("custom_bigs") == std::string::npos &&
+            entry.path().string().find("mods") == std::string::npos &&
             std::filesystem::file_size(entry.path()) > 0) {
           return entry.path();
         }
@@ -1805,7 +1857,8 @@ void Skate3BaseApp::InstallModOverrides() {
     for (const auto& entry : std::filesystem::recursive_directory_iterator(runtime()->game_data_root(), ec)) {
       if (ec) break;
       if (entry.is_regular_file() && entry.path().filename() == filename) {
-        if (entry.path().string().find("mods") == std::string::npos &&
+        if (entry.path().string().find("custom_bigs") == std::string::npos &&
+            entry.path().string().find("mods") == std::string::npos &&
             std::filesystem::file_size(entry.path()) > 0) {
           return entry.path();
         }
@@ -1821,33 +1874,49 @@ void Skate3BaseApp::InstallModOverrides() {
   for (const auto& mapping : kMappings) {
     std::filesystem::path mod_path = custom_dir / mapping.host_file;
     mod_path.replace_extension(".mod");
+    std::filesystem::path delta_path = custom_dir / mapping.host_file;
+    delta_path.replace_extension(".delta");
+    const auto direct_path = custom_dir / mapping.host_file;
 
-    if (!std::filesystem::exists(mod_path)) {
-      REXLOG_WARN("Skate 3 mods: {} not found (.mod), skipped",
-                  mod_path.filename().string());
+    const bool use_mod = std::filesystem::exists(mod_path);
+    const bool use_delta = !use_mod && std::filesystem::exists(delta_path);
+    const bool use_direct = !use_mod && !use_delta && std::filesystem::exists(direct_path);
+
+    if (!use_mod && !use_delta && !use_direct) {
+      REXLOG_WARN("Skate 3 mods: {} not found (.mod, .delta, or direct file), skipped",
+                  mapping.host_file);
       continue;
     }
 
-    auto mod_data = LoadModOverlay(mod_path);
-    if (mod_data) {
-      mod_data->stock_path =
-          find_stock_file(mapping.guest_subpath, mapping.is_dlc_big, mod_data->base_name);
-      if (mod_data->stock_path.empty() && mod_data->base_size > 0) {
-        REXLOG_ERROR("Skate 3 mods: stock base file not found for overlay: {}",
-                     mod_path.string());
+    if (use_mod || use_delta) {
+      const auto overlay_path = use_mod ? mod_path : delta_path;
+      auto mod_data = LoadModOverlay(overlay_path);
+      if (mod_data) {
+        mod_data->stock_path =
+            find_stock_file(mapping.guest_subpath, mapping.is_dlc_big, mod_data->base_name);
+        if (mod_data->stock_path.empty() && mod_data->base_size > 0) {
+          REXLOG_ERROR("Skate 3 mods: stock base file not found for overlay: {}",
+                       overlay_path.string());
+          continue;
+        }
+        REXLOG_INFO("Skate 3 mods: MOD OVERLAY active: {} (base={})",
+                    overlay_path.filename().string(), mod_data->stock_path.string());
+        device->RegisterModEntry(mapping.host_file, mod_data);
+        device->RegisterModEntry(overlay_path.filename().string(), mod_data);
+        if (has_legacy_device) {
+          legacy_device->RegisterModEntry(mapping.host_file, mod_data);
+          legacy_device->RegisterModEntry(overlay_path.filename().string(), mod_data);
+        }
+      } else {
+        REXLOG_ERROR("Skate 3 mods: failed to load mod overlay: {}", overlay_path.string());
         continue;
       }
-      REXLOG_INFO("Skate 3 mods: MOD OVERLAY active: {} (base={})",
-                  mod_path.filename().string(), mod_data->stock_path.string());
-      device->RegisterModEntry(mapping.host_file, mod_data);
-      device->RegisterModEntry(mod_path.filename().string(), mod_data);
-    } else {
-      REXLOG_ERROR("Skate 3 mods: failed to load mod overlay: {}", mod_path.string());
-      continue;
     }
 
     const std::string target =
         std::string("skate3mods:\\") + mapping.host_file;
+    const std::string legacy_target =
+        std::string("skate3custombigs:\\") + mapping.host_file;
 
     if (!mapping.is_dlc_big) {
       const std::string guest_bs =
@@ -1879,7 +1948,8 @@ void Skate3BaseApp::InstallModOverrides() {
     }
 
     ++installed;
-    REXLOG_INFO("Skate 3 mods: {} -> {} (MOD OVERLAY)", mapping.guest_subpath, target);
+    REXLOG_INFO("Skate 3 mods: {} -> {} ({})", mapping.guest_subpath, target,
+                use_mod ? "MOD OVERLAY" : (use_delta ? "DELTA OVERLAY" : "HOST FILE"));
   }
 
   if (!active_dlc_mappings.empty() && runtime()->kernel_state() &&
@@ -1892,6 +1962,7 @@ void Skate3BaseApp::InstallModOverrides() {
             const auto target_file = package_path / guest_subpath;
             if (std::filesystem::exists(target_file)) {
               const std::string target = std::string("skate3mods:\\") + host_file;
+              const std::string legacy_target = std::string("skate3custombigs:\\") + host_file;
               std::string dev_root(device_path);
               if (!dev_root.empty() && dev_root.back() != '\\' && dev_root.back() != '/') {
                 dev_root += '\\';
@@ -1938,6 +2009,9 @@ void Skate3BaseApp::InstallModOverrides() {
   }
 
   runtime()->file_system()->RegisterDevice(std::move(device));
+  if (has_legacy_device) {
+    runtime()->file_system()->RegisterDevice(std::move(legacy_device));
+  }
 
   if (installed) {
     mods_installed_ = true;
