@@ -805,10 +805,6 @@ void Skate3BaseApp::OnPostSetup() {
   if (std::getenv("SKATE3_DISABLE_BIG_ALIASES") == nullptr) {
     InstallBigDeviceAliases();
   }
-  // Custom base-big overrides: serve modified db/miscboot/missions bigs from a
-  // host directory via VFS symlinks (the game tree stays untouched). Must run
-  // before the guest opens the base bigs; the registration is one-shot at init.
-  InstallCustomBigOverrides();
   // Portable saves: a "saves" folder next to the executable takes over
   // saved-game content when it exists (launcher-managed installs). Layout is
   // flattened to saves/<xuid>/<save>; nothing is migrated from the user
@@ -823,7 +819,13 @@ void Skate3BaseApp::OnPostSetup() {
       REXLOG_INFO("Skate 3 saves: using portable folder {}", portable_saves.string());
     }
   }
+  // Scan and install DLC packages before custom big overrides so that stock base
+  // files are available for delta overlays.
   InstallDlcPackages();
+  // Custom base-big overrides: serve modified db/miscboot/missions bigs from a
+  // host directory via VFS symlinks (the game tree stays untouched). Must run
+  // before the guest opens the base bigs; the registration is one-shot at init.
+  InstallCustomBigOverrides();
   InstallRecipeOverlay();
 
   // Register retail multi-entry-function alternate entries.
@@ -1773,6 +1775,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
 
   size_t installed = 0;
   auto* fs = runtime()->file_system();
+  std::vector<std::pair<std::string, std::string>> active_dlc_mappings;
   for (const auto& mapping : kMappings) {
     std::filesystem::path delta_path = custom_dir / mapping.host_file;
     delta_path.replace_extension(".delta");
@@ -1809,42 +1812,30 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
 
     const std::string target =
         std::string("skate3custombigs:\\") + mapping.host_file;
-    const std::string guest_bs =
-        std::string("\\Device\\Harddisk0\\Partition1\\") + mapping.guest_subpath;
-    std::string d_scheme = std::string("d:\\") + mapping.guest_subpath;
-    std::string big_scheme = std::string("big:") + mapping.guest_subpath;
-    // Forward-slash variants of the same paths.
-    std::string guest_bs_fwd = guest_bs;
-    std::string d_scheme_fwd = d_scheme;
-    std::string big_scheme_fwd = big_scheme;
-    auto slashes = [](std::string& s) {
-      std::replace(s.begin(), s.end(), '\\', '/');
-    };
-    slashes(guest_bs_fwd);
-    slashes(d_scheme_fwd);
-    slashes(big_scheme_fwd);
-    fs->RegisterSymbolicLink(guest_bs, target);
-    fs->RegisterSymbolicLink(guest_bs_fwd, target);
-    fs->RegisterSymbolicLink(d_scheme, target);
-    fs->RegisterSymbolicLink(d_scheme_fwd, target);
-    fs->RegisterSymbolicLink(big_scheme, target);
-    fs->RegisterSymbolicLink(big_scheme_fwd, target);
 
-    if (mapping.is_dlc_big) {
-      for (int i = 1; i <= 32; ++i) {
-        const std::string content_bs =
-            fmt::format("\\Device\\Content\\{}\\{}", i, mapping.guest_subpath);
-        const std::string content_bs_double =
-            fmt::format("\\Device\\Content\\{}\\\\{}", i, mapping.guest_subpath);
-        const std::string content_fwd =
-            fmt::format("\\Device\\Content\\{}/{}", i, mapping.guest_subpath);
-        const std::string content_fwd_double =
-            fmt::format("\\Device\\Content\\{}//{}", i, mapping.guest_subpath);
-        fs->RegisterSymbolicLink(content_bs, target);
-        fs->RegisterSymbolicLink(content_bs_double, target);
-        fs->RegisterSymbolicLink(content_fwd, target);
-        fs->RegisterSymbolicLink(content_fwd_double, target);
-      }
+    if (!mapping.is_dlc_big) {
+      const std::string guest_bs =
+          std::string("\\Device\\Harddisk0\\Partition1\\") + mapping.guest_subpath;
+      std::string d_scheme = std::string("d:\\") + mapping.guest_subpath;
+      std::string big_scheme = std::string("big:") + mapping.guest_subpath;
+      // Forward-slash variants of the same paths.
+      std::string guest_bs_fwd = guest_bs;
+      std::string d_scheme_fwd = d_scheme;
+      std::string big_scheme_fwd = big_scheme;
+      auto slashes = [](std::string& s) {
+        std::replace(s.begin(), s.end(), '\\', '/');
+      };
+      slashes(guest_bs_fwd);
+      slashes(d_scheme_fwd);
+      slashes(big_scheme_fwd);
+      fs->RegisterSymbolicLink(guest_bs, target);
+      fs->RegisterSymbolicLink(guest_bs_fwd, target);
+      fs->RegisterSymbolicLink(d_scheme, target);
+      fs->RegisterSymbolicLink(d_scheme_fwd, target);
+      fs->RegisterSymbolicLink(big_scheme, target);
+      fs->RegisterSymbolicLink(big_scheme_fwd, target);
+    } else {
+      active_dlc_mappings.emplace_back(std::string(mapping.guest_subpath), mapping.host_file);
       const std::string dlcbig_bs = std::string("dlcbig:\\") + mapping.guest_subpath;
       const std::string dlcbig_fwd = std::string("dlcbig:/") + mapping.guest_subpath;
       fs->RegisterSymbolicLink(dlcbig_bs, target);
@@ -1854,6 +1845,61 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     ++installed;
     REXLOG_INFO("Skate 3 custom bigs: {} -> {} ({})", mapping.guest_subpath, target,
                 use_delta ? "DELTA OVERLAY" : "HOST BIG");
+  }
+
+  if (!active_dlc_mappings.empty() && runtime()->kernel_state() &&
+      runtime()->kernel_state()->content_manager()) {
+    runtime()->kernel_state()->content_manager()->SetPackageMountCallbacks(
+        [fs, active_dlc_mappings](const std::string_view root_name,
+                                  const std::string_view device_path,
+                                  const std::filesystem::path& package_path) {
+          for (const auto& [guest_subpath, host_file] : active_dlc_mappings) {
+            const auto target_file = package_path / guest_subpath;
+            if (std::filesystem::exists(target_file)) {
+              const std::string target = std::string("skate3custombigs:\\") + host_file;
+              std::string dev_root(device_path);
+              if (!dev_root.empty() && dev_root.back() != '\\' && dev_root.back() != '/') {
+                dev_root += '\\';
+              }
+              std::string fwd_subpath = guest_subpath;
+              std::replace(fwd_subpath.begin(), fwd_subpath.end(), '\\', '/');
+
+              const std::string content_bs = dev_root + guest_subpath;
+              const std::string content_bs_double = dev_root + "\\" + guest_subpath;
+              const std::string content_fwd = dev_root + fwd_subpath;
+              const std::string content_fwd_double = dev_root + "/" + fwd_subpath;
+              const std::string root_bs = std::string(root_name) + ":\\" + guest_subpath;
+              const std::string root_fwd = std::string(root_name) + ":/" + fwd_subpath;
+
+              fs->RegisterSymbolicLink(content_bs, target);
+              fs->RegisterSymbolicLink(content_bs_double, target);
+              fs->RegisterSymbolicLink(content_fwd, target);
+              fs->RegisterSymbolicLink(content_fwd_double, target);
+              fs->RegisterSymbolicLink(root_bs, target);
+              fs->RegisterSymbolicLink(root_fwd, target);
+              REXLOG_INFO("Skate 3 DLC custom big mounted: {} -> {} for device {} (package {})",
+                          guest_subpath, target, device_path, root_name);
+            }
+          }
+        },
+        [fs, active_dlc_mappings](const std::string_view root_name,
+                                  const std::string_view device_path) {
+          for (const auto& [guest_subpath, host_file] : active_dlc_mappings) {
+            std::string dev_root(device_path);
+            if (!dev_root.empty() && dev_root.back() != '\\' && dev_root.back() != '/') {
+              dev_root += '\\';
+            }
+            std::string fwd_subpath = guest_subpath;
+            std::replace(fwd_subpath.begin(), fwd_subpath.end(), '\\', '/');
+
+            fs->UnregisterSymbolicLink(dev_root + guest_subpath);
+            fs->UnregisterSymbolicLink(dev_root + "\\" + guest_subpath);
+            fs->UnregisterSymbolicLink(dev_root + fwd_subpath);
+            fs->UnregisterSymbolicLink(dev_root + "/" + fwd_subpath);
+            fs->UnregisterSymbolicLink(std::string(root_name) + ":\\" + guest_subpath);
+            fs->UnregisterSymbolicLink(std::string(root_name) + ":/" + fwd_subpath);
+          }
+        });
   }
 
   runtime()->file_system()->RegisterDevice(std::move(device));
