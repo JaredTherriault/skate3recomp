@@ -150,6 +150,12 @@ def main():
 
     # Step 4: Package Windows Archive (Skate3Recomp-Windows.zip)
     win_zip = DIST_DIR / 'Skate3Recomp-Windows.zip'
+    build_win_dir = REPO_ROOT / 'build-win'
+    if (build_win_dir / 'skate3.exe').exists() and (build_win_dir / 'rexruntime.dll').exists():
+        WINDOWS_BIN_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(build_win_dir / 'skate3.exe', WINDOWS_BIN_DIR / 'skate3.exe')
+        shutil.copy2(build_win_dir / 'rexruntime.dll', WINDOWS_BIN_DIR / 'rexruntime.dll')
+
     if not (WINDOWS_BIN_DIR / 'skate3.exe').exists() or not (WINDOWS_BIN_DIR / 'rexruntime.dll').exists():
         print(f"Error: Missing Windows binaries in {WINDOWS_BIN_DIR}.", file=sys.stderr)
         print("Please ensure skate3.exe and rexruntime.dll exist in bin/windows/.", file=sys.stderr)
