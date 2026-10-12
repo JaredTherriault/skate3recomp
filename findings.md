@@ -92,29 +92,29 @@ To solve the DLC limitation cleanly, the recompilation leverages its native Virt
 
 ```
 [Retail Game Assets]      --> Skate3+DLC/Skate 3/data/content/missions.big
-[Custom Mod Packs]        --> custom_packs/west_coast_ots/
+[Raw Mod Packages]        --> mods/raw/west_coast_ots/
                                   |
                                   v
 [Pack Compositor Tool]    --> tools/pack_compositor.py
                                   |
                                   v
-[Active Custom Archives]  --> build/custom_bigs/missions.big
+[Active Mod Overlays]     --> mods/compiled/missions_custom.mod
                                   |
                                   v
-[Recomp VFS Mount]        --> skate3custombigs: mapped with priority override
+[Recomp VFS Mount]        --> skate3mods: mapped with priority override
                                   |
                                   v
-[Game Engine]             --> Transparently loads patched missions.big & db.big
+[Game Engine]             --> Transparently loads patched missions & db mod overlays
 ```
 
 ### 5.1 VFS Prioritization
-The game wrapper mounts `build/custom_bigs/` as `skate3custombigs:`. File open requests for core archives (`missions.big`, `db.big`, `miscboot.big`) check `skate3custombigs:` first. If present, the custom version is loaded transparently; if absent, the engine falls back to the clean retail files in `Skate3+DLC/`.
+The game wrapper mounts `mods/compiled/` as `skate3mods:`. File open requests for core archives (`missions.big`, `db.big`, `miscboot.big`, and DLC bigs) check `skate3mods:` first. If present, the custom mod overlay is loaded transparently; if absent, the engine falls back to the clean retail files in `Skate3+DLC/`.
 
 ---
 
 ## 6. Modular Custom Pack System
 
-Mods are organized as self-contained packages under `custom_packs/<pack_id>/`:
+Mods are organized as self-contained packages under `mods/raw/<pack_id>/`:
 
 ### 6.1 Pack Manifest (`pack.json`)
 ```json
@@ -136,13 +136,13 @@ Mods are organized as self-contained packages under `custom_packs/<pack_id>/`:
 ```
 
 ### 6.2 Tooling Pipeline
-- `tools/pack_compositor.py`: Merges enabled pack assets into `build/custom_bigs/`. Validates TOC entries, recalculates DJB2 hashes, adjusts FAT directory blocks, and updates string tables.
+- `tools/pack_compositor.py`: Merges enabled pack assets into `mods/compiled/`. Validates TOC entries, recalculates DJB2 hashes, adjusts FAT directory blocks, and updates string tables.
 - `tools/pack_manager.py`: Command-line tool to list, enable, disable, and validate mod packages.
 
 ### 6.3 In-Game Esc "Mods" Menu
 The PC recompilation includes a native Esc Settings overlay:
 - Added a dedicated **"Mods"** navigation category.
-- Dynamically scans `custom_packs/` and displays installed packs with checkboxes, versioning, author details, and challenge counts.
+- Dynamically scans `mods/raw/` and displays installed packs with checkboxes, versioning, author details, and challenge counts.
 - Toggling a mod stages the change in `config/mods.json` and displays an **"Apply & Restart"** prompt to seamlessly re-compose archives and restart the executable.
 
 ---

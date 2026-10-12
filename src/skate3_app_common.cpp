@@ -117,15 +117,12 @@ REXCVAR_DEFINE_STRING(skate3_dlc_root, "", "Skate 3",
                       "Directory containing Skate 3 DLC package files");
 REXCVAR_DEFINE_BOOL(skate3_auto_install_dlc, true, "Skate 3",
                     "Install DLC package files found in configured DLC folders");
-REXCVAR_DEFINE_BOOL(skate3_custom_bigs, false, "Skate 3",
-                    "Serve override base .big files (db/miscboot/missions) from "
-                    "skate3_custom_bigs_dir through VFS symlinks, without modifying the "
-                    "game tree. The challenge registration chain for Morshu's Paradise "
-                    "lives in these bigs (analysis/custom/morshus_paradise/).");
-REXCVAR_DEFINE_STRING(skate3_custom_bigs_dir, "", "Skate 3",
-                      "Directory holding the override big files "
-                      "(empty = <app root>/custom_bigs). Expected members: "
-                      "db_custom.big, miscboot_custom.big, missions_custom.big");
+REXCVAR_DEFINE_BOOL(skate3_mods, false, "Skate 3",
+                    "Serve override mod files from skate3_mods_dir through "
+                    "VFS symlinks, without modifying the game tree.");
+REXCVAR_DEFINE_STRING(skate3_mods_dir, "", "Skate 3",
+                      "Directory holding compiled mod files (.mod) "
+                      "(empty = <app root>/mods/compiled).");
 REXCVAR_DEFINE_BOOL(skate3_ultrawide, false, "Skate 3",
                     "Ultrawide display support: the native renderer draws true widescreen "
                     "frames at the host display aspect (requires the native renderer; the "
@@ -822,10 +819,10 @@ void Skate3BaseApp::OnPostSetup() {
   // Scan and install DLC packages before custom big overrides so that stock base
   // files are available for delta overlays.
   InstallDlcPackages();
-  // Custom base-big overrides: serve modified db/miscboot/missions bigs from a
+  // Custom mod overrides: serve modified db/miscboot/missions/DLC mods from a
   // host directory via VFS symlinks (the game tree stays untouched). Must run
   // before the guest opens the base bigs; the registration is one-shot at init.
-  InstallCustomBigOverrides();
+  InstallModOverrides();
   InstallRecipeOverlay();
 
   // Register retail multi-entry-function alternate entries.
@@ -968,9 +965,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   auto load_mods = [this]() -> std::vector<rex::ui::SimpleModInfo> {
     std::vector<rex::ui::SimpleModInfo> result;
     const auto app_root = rex::filesystem::GetAppRootFolder();
-    auto packs_dir = app_root / "custom_packs";
+    auto packs_dir = app_root / "mods" / "raw";
     if (!std::filesystem::is_directory(packs_dir)) {
-      packs_dir = app_root.parent_path() / "custom_packs";
+      packs_dir = app_root.parent_path() / "mods" / "raw";
     }
     if (!std::filesystem::is_directory(packs_dir)) {
       return result;
@@ -1008,9 +1005,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
 
   auto save_mods = [this](const std::vector<rex::ui::SimpleModInfo>& mods) {
     const auto app_root = rex::filesystem::GetAppRootFolder();
-    auto packs_dir = app_root / "custom_packs";
+    auto packs_dir = app_root / "mods" / "raw";
     if (!std::filesystem::is_directory(packs_dir)) {
-      packs_dir = app_root.parent_path() / "custom_packs";
+      packs_dir = app_root.parent_path() / "mods" / "raw";
     }
     if (!std::filesystem::is_directory(packs_dir)) {
       return;
@@ -1386,7 +1383,7 @@ namespace {
 using rex::X_STATUS;
 
 #pragma pack(push, 1)
-struct DeltaFileHeader {
+struct ModFileHeader {
   uint32_t magic;         // 'S3DL' (0x5333444C)
   uint32_t version;       // 1
   uint64_t virtual_size;
@@ -1396,66 +1393,66 @@ struct DeltaFileHeader {
   char base_name[64];
 };
 
-struct DeltaChunkHeader {
+struct ModChunkHeader {
   uint64_t offset;
   uint32_t length;
   uint32_t reserved;
 };
 #pragma pack(pop)
 
-struct DeltaChunk {
+struct ModChunk {
   uint64_t offset = 0;
   uint32_t length = 0;
   std::vector<uint8_t> data;
 };
 
-struct DeltaOverlayData {
+struct ModOverlayData {
   std::string base_name;
   uint64_t virtual_size = 0;
   uint64_t base_size = 0;
-  std::vector<DeltaChunk> chunks;
+  std::vector<ModChunk> chunks;
   std::filesystem::path stock_path;
 };
 
-std::shared_ptr<DeltaOverlayData> LoadDeltaOverlay(const std::filesystem::path& delta_path) {
-  FILE* file = rex::filesystem::OpenFile(delta_path, "rb");
+std::shared_ptr<ModOverlayData> LoadModOverlay(const std::filesystem::path& mod_path) {
+  FILE* file = rex::filesystem::OpenFile(mod_path, "rb");
   if (!file) {
-    REXLOG_ERROR("Skate 3 delta: cannot open {}", delta_path.string());
+    REXLOG_ERROR("Skate 3 mods: cannot open {}", mod_path.string());
     return nullptr;
   }
-  DeltaFileHeader hdr{};
+  ModFileHeader hdr{};
   if (fread(&hdr, 1, sizeof(hdr), file) != sizeof(hdr)) {
     fclose(file);
-    REXLOG_ERROR("Skate 3 delta: header read failed {}", delta_path.string());
+    REXLOG_ERROR("Skate 3 mods: header read failed {}", mod_path.string());
     return nullptr;
   }
   if (hdr.magic != 0x5333444C) {  // 'S3DL'
     fclose(file);
-    REXLOG_ERROR("Skate 3 delta: bad magic {:08X} in {}", hdr.magic, delta_path.string());
+    REXLOG_ERROR("Skate 3 mods: bad magic {:08X} in {}", hdr.magic, mod_path.string());
     return nullptr;
   }
 
-  auto data = std::make_shared<DeltaOverlayData>();
+  auto data = std::make_shared<ModOverlayData>();
   hdr.base_name[sizeof(hdr.base_name) - 1] = '\0';
   data->base_name = hdr.base_name;
   data->virtual_size = hdr.virtual_size;
   data->base_size = hdr.base_size;
 
   for (uint32_t i = 0; i < hdr.chunk_count; ++i) {
-    DeltaChunkHeader chdr{};
+    ModChunkHeader chdr{};
     if (fread(&chdr, 1, sizeof(chdr), file) != sizeof(chdr)) {
       fclose(file);
-      REXLOG_ERROR("Skate 3 delta: chunk {} header read failed in {}", i, delta_path.string());
+      REXLOG_ERROR("Skate 3 mods: chunk {} header read failed in {}", i, mod_path.string());
       return nullptr;
     }
-    DeltaChunk chunk;
+    ModChunk chunk;
     chunk.offset = chdr.offset;
     chunk.length = chdr.length;
     chunk.data.resize(chdr.length);
     if (chdr.length > 0) {
       if (fread(chunk.data.data(), 1, chdr.length, file) != chdr.length) {
         fclose(file);
-        REXLOG_ERROR("Skate 3 delta: chunk {} payload read failed in {}", i, delta_path.string());
+        REXLOG_ERROR("Skate 3 mods: chunk {} payload read failed in {}", i, mod_path.string());
         return nullptr;
       }
     }
@@ -1465,16 +1462,16 @@ std::shared_ptr<DeltaOverlayData> LoadDeltaOverlay(const std::filesystem::path& 
   return data;
 }
 
-class DeltaOverlayFile : public rex::filesystem::File {
+class ModOverlayFile : public rex::filesystem::File {
  public:
-  DeltaOverlayFile(uint32_t file_access, rex::filesystem::Entry* entry,
-                   std::shared_ptr<DeltaOverlayData> delta_data,
-                   std::unique_ptr<rex::filesystem::FileHandle> base_file)
+  ModOverlayFile(uint32_t file_access, rex::filesystem::Entry* entry,
+                 std::shared_ptr<ModOverlayData> mod_data,
+                 std::unique_ptr<rex::filesystem::FileHandle> base_file)
       : rex::filesystem::File(file_access, entry),
-        delta_data_(std::move(delta_data)),
+        mod_data_(std::move(mod_data)),
         base_file_(std::move(base_file)) {}
 
-  ~DeltaOverlayFile() override = default;
+  ~ModOverlayFile() override = default;
 
   void Destroy() override {
     delete this;
@@ -1486,20 +1483,20 @@ class DeltaOverlayFile : public rex::filesystem::File {
                           rex::filesystem::FileAccess::kFileReadData))) {
       return X_STATUS_ACCESS_DENIED;
     }
-    if (byte_offset >= delta_data_->virtual_size) {
+    if (byte_offset >= mod_data_->virtual_size) {
       if (out_bytes_read) *out_bytes_read = 0;
       return X_STATUS_END_OF_FILE;
     }
 
     size_t to_read = buffer.size();
-    if (byte_offset + to_read > delta_data_->virtual_size) {
-      to_read = static_cast<size_t>(delta_data_->virtual_size - byte_offset);
+    if (byte_offset + to_read > mod_data_->virtual_size) {
+      to_read = static_cast<size_t>(mod_data_->virtual_size - byte_offset);
     }
 
     // 1. Read base data if within base_size and base_file is available
-    if (byte_offset < delta_data_->base_size && base_file_) {
+    if (byte_offset < mod_data_->base_size && base_file_) {
       const size_t base_read_len =
-          std::min(to_read, static_cast<size_t>(delta_data_->base_size - byte_offset));
+          std::min(to_read, static_cast<size_t>(mod_data_->base_size - byte_offset));
       size_t bytes_read = 0;
       if (!base_file_->Read(byte_offset, buffer.data(), base_read_len, &bytes_read)) {
         std::memset(buffer.data(), 0, base_read_len);
@@ -1515,7 +1512,7 @@ class DeltaOverlayFile : public rex::filesystem::File {
     const uint64_t req_start = byte_offset;
     const uint64_t req_end = byte_offset + to_read;
 
-    for (const auto& chunk : delta_data_->chunks) {
+    for (const auto& chunk : mod_data_->chunks) {
       const uint64_t chunk_start = chunk.offset;
       const uint64_t chunk_end = chunk.offset + chunk.length;
       if (chunk_start < req_end && chunk_end > req_start) {
@@ -1544,39 +1541,39 @@ class DeltaOverlayFile : public rex::filesystem::File {
   }
 
  private:
-  std::shared_ptr<DeltaOverlayData> delta_data_;
+  std::shared_ptr<ModOverlayData> mod_data_;
   std::unique_ptr<rex::filesystem::FileHandle> base_file_;
 };
 
-class DeltaOverlayEntry : public rex::filesystem::Entry {
+class ModOverlayEntry : public rex::filesystem::Entry {
  public:
-  DeltaOverlayEntry(rex::filesystem::Device* device, rex::filesystem::Entry* parent,
-                    const std::string_view path,
-                    std::shared_ptr<DeltaOverlayData> delta_data)
+  ModOverlayEntry(rex::filesystem::Device* device, rex::filesystem::Entry* parent,
+                  const std::string_view path,
+                  std::shared_ptr<ModOverlayData> mod_data)
       : rex::filesystem::Entry(device, parent, path),
-        delta_data_(std::move(delta_data)) {
+        mod_data_(std::move(mod_data)) {
     attributes_ = rex::filesystem::kFileAttributeNormal | rex::filesystem::kFileAttributeReadOnly;
-    size_ = static_cast<size_t>(delta_data_->virtual_size);
+    size_ = static_cast<size_t>(mod_data_->virtual_size);
     allocation_size_ = (size_ + 0xFFF) & ~static_cast<size_t>(0xFFF);
   }
 
   X_STATUS Open(uint32_t desired_access, rex::filesystem::File** out_file) override {
     std::unique_ptr<rex::filesystem::FileHandle> base_handle;
-    if (!delta_data_->stock_path.empty() && std::filesystem::exists(delta_data_->stock_path)) {
+    if (!mod_data_->stock_path.empty() && std::filesystem::exists(mod_data_->stock_path)) {
       base_handle = rex::filesystem::FileHandle::OpenExisting(
-          delta_data_->stock_path, rex::filesystem::FileAccess::kFileReadData);
+          mod_data_->stock_path, rex::filesystem::FileAccess::kFileReadData);
     }
-    if (!base_handle && delta_data_->base_size > 0) {
-      REXLOG_ERROR("Skate 3 delta overlay: failed to open stock base file {}",
-                   delta_data_->stock_path.string());
+    if (!base_handle && mod_data_->base_size > 0) {
+      REXLOG_ERROR("Skate 3 mod overlay: failed to open stock base file {}",
+                   mod_data_->stock_path.string());
       return X_STATUS_NO_SUCH_FILE;
     }
-    *out_file = new DeltaOverlayFile(desired_access, this, delta_data_, std::move(base_handle));
+    *out_file = new ModOverlayFile(desired_access, this, mod_data_, std::move(base_handle));
     return X_STATUS_SUCCESS;
   }
 
  private:
-  std::shared_ptr<DeltaOverlayData> delta_data_;
+  std::shared_ptr<ModOverlayData> mod_data_;
 };
 
 class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
@@ -1585,9 +1582,9 @@ class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
                         const std::filesystem::path& host_path)
       : rex::filesystem::HostPathDevice(mount_path, host_path, false) {}
 
-  void RegisterDeltaEntry(const std::string& name, std::shared_ptr<DeltaOverlayData> delta_data) {
-    auto entry = std::make_unique<DeltaOverlayEntry>(this, nullptr, "\\" + name, std::move(delta_data));
-    delta_entries_[name] = std::move(entry);
+  void RegisterModEntry(const std::string& name, std::shared_ptr<ModOverlayData> mod_data) {
+    auto entry = std::make_unique<ModOverlayEntry>(this, nullptr, "\\" + name, std::move(mod_data));
+    mod_entries_[name] = std::move(entry);
   }
 
   rex::filesystem::Entry* ResolvePath(const std::string_view path) override {
@@ -1595,53 +1592,40 @@ class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
     while (!normalized.empty() && (normalized.front() == '\\' || normalized.front() == '/')) {
       normalized.erase(normalized.begin());
     }
-    auto it = delta_entries_.find(normalized);
-    if (it != delta_entries_.end()) {
-      REXLOG_INFO("Skate 3 custom bigs: RESOLVE (DELTA) '{}' -> FOUND", path);
+    auto it = mod_entries_.find(normalized);
+    if (it != mod_entries_.end()) {
+      REXLOG_INFO("Skate 3 mods: RESOLVE (MOD OVERLAY) '{}' -> FOUND", path);
       return it->second.get();
     }
     auto* entry = rex::filesystem::HostPathDevice::ResolvePath(path);
-    REXLOG_INFO("Skate 3 custom bigs: RESOLVE '{}' -> {}",
+    REXLOG_INFO("Skate 3 mods: RESOLVE '{}' -> {}",
                 path, entry ? "FOUND" : "NOT-FOUND");
     return entry;
   }
 
  private:
-  std::unordered_map<std::string, std::unique_ptr<DeltaOverlayEntry>> delta_entries_;
+  std::unordered_map<std::string, std::unique_ptr<ModOverlayEntry>> mod_entries_;
 };
 
 }  // namespace
 
-void Skate3BaseApp::InstallCustomBigOverrides() {
-  if (custom_bigs_installed_ || !runtime() || !runtime()->file_system()) {
+void Skate3BaseApp::InstallModOverrides() {
+  if (mods_installed_ || !runtime() || !runtime()->file_system()) {
     return;
   }
-  if (!REXCVAR_GET(skate3_custom_bigs)) {
+  if (!REXCVAR_GET(skate3_mods)) {
     return;
   }
 
-  // The override bigs live in a host directory next to the executable (or the
-  // cvar dir). The guest never touches the game tree: every big open resolves
-  // through a VFS symlink to this device. Registering the symlinks for BOTH
-  // the raw partition path and the file-server scheme paths is required
-  // because the guest opens base bigs through several schemes ('d:\...',
-  // 'big:...', and the resolved '\Device\Harddisk0\Partition1\...' path).
-  // The symlink table matches by longest available prefix in an unspecified
-  // order, but every route converges: a generic-prefix hit rewrites the path
-  // into the partition form, which then matches the specific file symlink.
   const auto app_root = rex::filesystem::GetAppRootFolder();
-  auto custom_root = std::string(REXCVAR_GET(skate3_custom_bigs_dir));
+  auto custom_root = std::string(REXCVAR_GET(skate3_mods_dir));
   std::filesystem::path custom_dir;
   if (!custom_root.empty()) {
     custom_dir = std::filesystem::path(custom_root);
   } else {
-    // Check mods/compiled, then legacy custom_bigs
     const std::vector<std::filesystem::path> search_paths = {
         app_root / "mods" / "compiled",
         app_root.parent_path() / "mods" / "compiled",
-        app_root / "custom_bigs",
-        app_root.parent_path() / "custom_bigs",
-        app_root.parent_path() / "build" / "custom_bigs",
     };
     for (const auto& sp : search_paths) {
       if (std::filesystem::exists(sp)) {
@@ -1656,16 +1640,10 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   std::error_code dir_ec;
   std::filesystem::create_directories(custom_dir, dir_ec);
 
-  // Raw Mod Packages: check mods/raw then legacy custom_packs
+  // Raw Mod Packages
   std::filesystem::path packs_dir = app_root / "mods" / "raw";
   if (!std::filesystem::is_directory(packs_dir)) {
     packs_dir = app_root.parent_path() / "mods" / "raw";
-  }
-  if (!std::filesystem::is_directory(packs_dir)) {
-    packs_dir = app_root / "custom_packs";
-  }
-  if (!std::filesystem::is_directory(packs_dir)) {
-    packs_dir = app_root.parent_path() / "custom_packs";
   }
 
   std::filesystem::path compositor_script = app_root.parent_path() / "tools" / "pack_compositor.py";
@@ -1742,7 +1720,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   }
 
   if (!std::filesystem::is_directory(custom_dir)) {
-    REXLOG_WARN("Skate 3 custom bigs: directory not found, override disabled: {}",
+    REXLOG_WARN("Skate 3 mods: directory not found, override disabled: {}",
                 custom_dir.string());
     return;
   }
@@ -1778,9 +1756,9 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   };
 
   auto device = std::make_unique<LoggingOverrideDevice>(
-      "skate3custombigs:", custom_dir);
+      "skate3mods:", custom_dir);
   if (!device->Initialize()) {
-    REXLOG_WARN("Skate 3 custom bigs: failed to initialize host device for {}",
+    REXLOG_WARN("Skate 3 mods: failed to initialize host device for {}",
                 custom_dir.string());
     return;
   }
@@ -1816,8 +1794,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     for (const auto& entry : std::filesystem::recursive_directory_iterator(user_root, ec)) {
       if (ec) break;
       if (entry.is_regular_file() && entry.path().filename() == filename) {
-        if (entry.path().string().find("custom_bigs") == std::string::npos &&
-            entry.path().string().find("mods") == std::string::npos &&
+        if (entry.path().string().find("mods") == std::string::npos &&
             std::filesystem::file_size(entry.path()) > 0) {
           return entry.path();
         }
@@ -1828,8 +1805,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     for (const auto& entry : std::filesystem::recursive_directory_iterator(runtime()->game_data_root(), ec)) {
       if (ec) break;
       if (entry.is_regular_file() && entry.path().filename() == filename) {
-        if (entry.path().string().find("custom_bigs") == std::string::npos &&
-            entry.path().string().find("mods") == std::string::npos &&
+        if (entry.path().string().find("mods") == std::string::npos &&
             std::filesystem::file_size(entry.path()) > 0) {
           return entry.path();
         }
@@ -1845,43 +1821,33 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   for (const auto& mapping : kMappings) {
     std::filesystem::path mod_path = custom_dir / mapping.host_file;
     mod_path.replace_extension(".mod");
-    std::filesystem::path delta_path = custom_dir / mapping.host_file;
-    delta_path.replace_extension(".delta");
-    const auto big_path = custom_dir / mapping.host_file;
 
-    const bool use_mod = std::filesystem::exists(mod_path);
-    const bool use_delta = !use_mod && std::filesystem::exists(delta_path);
-    const bool use_big = !use_mod && !use_delta && std::filesystem::exists(big_path);
-
-    if (!use_mod && !use_delta && !use_big) {
-      REXLOG_WARN("Skate 3 mods: {} not found (neither .mod, .delta nor .big), skipped",
-                  mapping.host_file);
+    if (!std::filesystem::exists(mod_path)) {
+      REXLOG_WARN("Skate 3 mods: {} not found (.mod), skipped",
+                  mod_path.filename().string());
       continue;
     }
 
-    if (use_mod || use_delta) {
-      const auto overlay_path = use_mod ? mod_path : delta_path;
-      auto delta_data = LoadDeltaOverlay(overlay_path);
-      if (delta_data) {
-        delta_data->stock_path =
-            find_stock_file(mapping.guest_subpath, mapping.is_dlc_big, delta_data->base_name);
-        if (delta_data->stock_path.empty() && delta_data->base_size > 0) {
-          REXLOG_ERROR("Skate 3 mods: stock base file not found for overlay: {}",
-                       overlay_path.string());
-          continue;
-        }
-        REXLOG_INFO("Skate 3 mods: MOD OVERLAY active: {} (base={})",
-                    overlay_path.filename().string(), delta_data->stock_path.string());
-        device->RegisterDeltaEntry(mapping.host_file, delta_data);
-        device->RegisterDeltaEntry(overlay_path.filename().string(), delta_data);
-      } else {
-        REXLOG_ERROR("Skate 3 mods: failed to load mod overlay: {}", overlay_path.string());
+    auto mod_data = LoadModOverlay(mod_path);
+    if (mod_data) {
+      mod_data->stock_path =
+          find_stock_file(mapping.guest_subpath, mapping.is_dlc_big, mod_data->base_name);
+      if (mod_data->stock_path.empty() && mod_data->base_size > 0) {
+        REXLOG_ERROR("Skate 3 mods: stock base file not found for overlay: {}",
+                     mod_path.string());
         continue;
       }
+      REXLOG_INFO("Skate 3 mods: MOD OVERLAY active: {} (base={})",
+                  mod_path.filename().string(), mod_data->stock_path.string());
+      device->RegisterModEntry(mapping.host_file, mod_data);
+      device->RegisterModEntry(mod_path.filename().string(), mod_data);
+    } else {
+      REXLOG_ERROR("Skate 3 mods: failed to load mod overlay: {}", mod_path.string());
+      continue;
     }
 
     const std::string target =
-        std::string("skate3custombigs:\\") + mapping.host_file;
+        std::string("skate3mods:\\") + mapping.host_file;
 
     if (!mapping.is_dlc_big) {
       const std::string guest_bs =
@@ -1913,8 +1879,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
     }
 
     ++installed;
-    REXLOG_INFO("Skate 3 mods: {} -> {} ({})", mapping.guest_subpath, target,
-                use_mod ? "MOD OVERLAY" : (use_delta ? "DELTA OVERLAY" : "HOST BIG"));
+    REXLOG_INFO("Skate 3 mods: {} -> {} (MOD OVERLAY)", mapping.guest_subpath, target);
   }
 
   if (!active_dlc_mappings.empty() && runtime()->kernel_state() &&
@@ -1926,7 +1891,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
           for (const auto& [guest_subpath, host_file] : active_dlc_mappings) {
             const auto target_file = package_path / guest_subpath;
             if (std::filesystem::exists(target_file)) {
-              const std::string target = std::string("skate3custombigs:\\") + host_file;
+              const std::string target = std::string("skate3mods:\\") + host_file;
               std::string dev_root(device_path);
               if (!dev_root.empty() && dev_root.back() != '\\' && dev_root.back() != '/') {
                 dev_root += '\\';
@@ -1947,7 +1912,7 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
               fs->RegisterSymbolicLink(content_fwd_double, target);
               fs->RegisterSymbolicLink(root_bs, target);
               fs->RegisterSymbolicLink(root_fwd, target);
-              REXLOG_INFO("Skate 3 DLC custom big mounted: {} -> {} for device {} (package {})",
+              REXLOG_INFO("Skate 3 DLC mod mounted: {} -> {} for device {} (package {})",
                           guest_subpath, target, device_path, root_name);
             }
           }
@@ -1975,8 +1940,8 @@ void Skate3BaseApp::InstallCustomBigOverrides() {
   runtime()->file_system()->RegisterDevice(std::move(device));
 
   if (installed) {
-    custom_bigs_installed_ = true;
-    REXLOG_INFO("Installed Skate 3 custom big overrides ({} files) from {}", installed,
+    mods_installed_ = true;
+    REXLOG_INFO("Installed Skate 3 mod overrides ({} files) from {}", installed,
                 custom_dir.string());
   }
 }
@@ -2002,7 +1967,7 @@ void Skate3BaseApp::InstallDlcPackages() {
   }
 
   // Purge legacy/prototype DLC packages from the installed marketplace directory.
-  // Custom challenge packs are handled entirely via the modular custom_packs delta system;
+  // Custom challenge packs are handled entirely via the modular mods system;
   // legacy STFS prototype packages with non-standard vault structures cause the
   // guest vault manager to spin infinitely during DLC scanning.
   const auto installed_marketplace_root =

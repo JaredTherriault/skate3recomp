@@ -28,22 +28,26 @@ Skate3/
 │   ├── 0165E5B906309F63...         # Maloof Money Cup 2010 NYC
 │   ├── 8576AE236D00CF0FD...        # San Van Party Pack (Art Gallery)
 │   └── D1472E11CFD502BC...         # Black Box Park
-└── custom_bigs/                    # Pre-composed custom challenge bigs
-    ├── .active                     # Sentinel file indicating active modded state
-    ├── db_custom.big
-    ├── miscboot_custom.big
-    ├── missions_custom.big
-    ├── global_locators_univ.rx2
-    ├── dway_park_custom.big
-    ├── maloof_custom.big
-    └── play_custom.big
+└── mods/
+    ├── raw/                        # Mod JSON manifests and assets
+    └── compiled/                   # Compiled .mod overlay binaries
+        ├── .active                 # Sentinel file indicating active modded state
+        ├── db_custom.mod
+        ├── miscboot_custom.mod
+        ├── missions_custom.mod
+        ├── global_locators_univ.rx2
+        ├── dway_park_custom.mod
+        ├── maloof_custom.mod
+        └── play_custom.mod
 ```
 
 ---
 
-## 2. Transferring Custom Challenges (`custom_bigs/`)
+## 2. Dynamic vs Pre-compiled Mods (`mods/`)
 
-Under Proton, Python 3 is typically not installed inside the Wine prefix. Therefore, **always pre-compose your packs on your PC before transferring them to Steam Deck**:
+The Windows binary (`skate3.exe`) running under Proton can automatically download and cache a portable Python runtime on first launch if internet access is available, dynamically building any mods placed in `mods/raw/`.
+
+Alternatively, you can compile mods on your PC and transfer the `mods/` directory to Steam Deck:
 
 1. **On your Development PC**:
    Compose all active challenge packs:
@@ -51,10 +55,7 @@ Under Proton, Python 3 is typically not installed inside the Wine prefix. Theref
    python3 tools/pack_compositor.py --force
    ```
 2. **Copy the Output**:
-   Copy the entire `build/custom_bigs/` folder from your PC into your Steam Deck game directory as `custom_bigs/` (sitting next to `skate3.exe`).
-   
-   > [!IMPORTANT]
-   > Make sure the hidden `.active` sentinel file inside `custom_bigs/` is copied over. If `.active` is missing, the engine assumes no mods are enabled and will boot purely into stock retail disc/DLC data.
+   Copy `mods/raw/` and `mods/compiled/` to your Steam Deck game directory next to `skate3.exe`.
 
 ---
 
@@ -68,7 +69,7 @@ The recomp engine includes automatic DLC discovery and mounting.
    ```
 2. Drop your official DLC files (the unextracted STFS packages) directly into `dlc/`.
 3. At launch, `DiscoverDlcSourceDirectories()` scans `<executable_folder>/dlc/`, reads the STFS package headers, and automatically mounts them to the virtual console device slots (`\Device\Content\1..32\...`).
-4. In turn, `custom_bigs/` provides the corresponding patched big overrides (`dway_park_custom.big`, `maloof_custom.big`, `play_custom.big`) to inject custom spots, unified arrows, and tuned scores into the DLC environments.
+4. In turn, `mods/compiled/` provides the corresponding `.mod` overlay overrides (`dway_park_custom.mod`, `maloof_custom.mod`, `play_custom.mod`) to inject custom spots, unified arrows, and tuned scores into the DLC environments.
 
 ---
 
@@ -124,28 +125,26 @@ Quiver detects releases via the GitHub API (`/repos/JaredTherriault/skate3recomp
   ├── skate3.exe
   ├── rexruntime.dll
   ├── skate3.toml
-  └── custom_bigs/
-      ├── .active
-      └── ... (.big files)
+  ├── tools/
+  └── mods/
+      ├── raw/
+      └── compiled/
+          └── .gitkeep
   ```
 When you click **Download / Install** in Quiver, it will download `Skate3Recomp-Windows.zip`, extract it to `Apps/Skate3-Skate3Recompiled/`, and configure Proton runner automatically.
 
 ---
 
-## 5. Manual Steam / Proton Setup
-
----
-
 ## 5. Verification on Steam Deck
 
-When the game launches, the engine logs its mount operations to `rexglue.log` in the game directory. You can verify that custom bigs and DLC are functioning by checking the log:
+When the game launches, the engine logs its mount operations to `rexglue.log` in the game directory. You can verify that custom mods and DLC are functioning by checking the log:
 
 ```text
-[INFO] Skate 3 custom bigs: RESOLVE 'data\big\db.big' -> FOUND
-[INFO] Skate 3 custom bigs: RESOLVE 'dway_park_00000000.big' -> FOUND
-[INFO] Skate 3 custom bigs: RESOLVE 'play_00000000.big' -> FOUND
-[INFO] Skate 3 custom bigs: RESOLVE 'maloof_money_cup_00000000.big' -> FOUND
-[INFO] Installed Skate 3 custom big overrides (7 files) from Z:\path\to\custom_bigs
+[INFO] Skate 3 mods: MOD OVERLAY active: db_custom.mod (base=...)
+[INFO] Skate 3 mods: MOD OVERLAY active: dway_park_custom.mod (base=...)
+[INFO] Skate 3 mods: MOD OVERLAY active: play_custom.mod (base=...)
+[INFO] Skate 3 mods: MOD OVERLAY active: maloof_custom.mod (base=...)
+[INFO] Installed Skate 3 mod overrides (7 files) from Z:\path\to\mods\compiled
 ```
 
 All custom spots (**"Bridge Over Tranquil Water"**, **"Nine to Five"**, **"Regs to Riches"**, and West Coast spots) will appear on the Challenge Map with their custom flythroughs, unified obstacle markers, and tuned point targets.

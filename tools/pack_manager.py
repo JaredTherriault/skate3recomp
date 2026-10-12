@@ -44,7 +44,7 @@ def cmd_list(args):
     print("=" * 80)
 
     # Show active cache state
-    state_file = Path(args.out_dir) / '.pack_state.json'
+    state_file = Path(args.out_dir) / '.mod_state.json'
     if state_file.exists():
         try:
             with open(state_file, 'r', encoding='utf-8') as f:
@@ -232,9 +232,9 @@ def cmd_scaffold(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Skate 3 Recomp Custom Challenge Pack Manager")
-    ap.add_argument('--packs-dir', default=str(DEFAULT_PACKS_DIR), help="Directory containing custom packs")
-    ap.add_argument('--out-dir', default=str(DEFAULT_OUT_DIR), help="Output custom_bigs directory")
+    ap = argparse.ArgumentParser(description="Skate 3 Recomp Mod Pack Manager")
+    ap.add_argument('--packs-dir', default=str(DEFAULT_PACKS_DIR), help="Directory containing raw mod packs (mods/raw)")
+    ap.add_argument('--out-dir', default=str(DEFAULT_OUT_DIR), help="Output compiled mods directory (mods/compiled)")
 
     subs = ap.add_subparsers(dest='command', help='Command to run')
 
@@ -250,11 +250,11 @@ def main():
     p_disable.add_argument('pack_id', help='Pack ID or folder name')
 
     # sync
-    p_sync = subs.add_parser('sync', help='Synchronize custom bigs with enabled packs')
+    p_sync = subs.add_parser('sync', help='Synchronize compiled mods with enabled packs')
     p_sync.add_argument('--force', action='store_true', help='Force recomposition')
 
     # restore-stock
-    p_stock = subs.add_parser('restore-stock', help='Restore custom_bigs to 100%% clean stock retail disc')
+    p_stock = subs.add_parser('restore-stock', help='Restore mods to 100%% clean stock retail disc')
 
     # scaffold
     p_scaffold = subs.add_parser('scaffold', help='Create a new empty custom pack template')
