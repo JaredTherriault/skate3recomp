@@ -140,6 +140,15 @@ def main():
                     rel = p.relative_to(REPO_ROOT)
                     extra_files.append((p, str(rel)))
 
+    custom_bigs_dir = BUILD_DIR / 'custom_bigs'
+    if not custom_bigs_dir.exists():
+        custom_bigs_dir = REPO_ROOT / 'custom_bigs'
+    if custom_bigs_dir.is_dir():
+        for p in custom_bigs_dir.rglob('*'):
+            if p.is_file() and not p.name.endswith('.big') and '__pycache__' not in p.parts:
+                rel = p.relative_to(custom_bigs_dir)
+                extra_files.append((p, f"custom_bigs/{rel}"))
+
     # Step 3: Package Linux Archive (Skate3Recomp-Linux.zip)
     linux_zip = DIST_DIR / 'Skate3Recomp-Linux.zip'
     linux_files = [

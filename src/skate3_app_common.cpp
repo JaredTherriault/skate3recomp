@@ -1931,6 +1931,36 @@ void Skate3BaseApp::InstallDlcPackages() {
                 create_ec.message());
   }
 
+  // Purge legacy/prototype DLC packages from the installed marketplace directory.
+  // Custom challenge packs are handled entirely via the modular custom_packs delta system;
+  // legacy STFS prototype packages with non-standard vault structures cause the
+  // guest vault manager to spin infinitely during DLC scanning.
+  const auto installed_marketplace_root =
+      runtime()->user_data_root() / "0000000000000000" /
+      fmt::format("{:08X}", title_id) / "00000002";
+  const auto installed_headers_root =
+      runtime()->user_data_root() / "0000000000000000" /
+      fmt::format("{:08X}", title_id) / "Headers" / "00000002";
+
+  if (std::filesystem::is_directory(installed_marketplace_root)) {
+    std::error_code dir_ec;
+    for (const auto& entry : std::filesystem::directory_iterator(installed_marketplace_root, dir_ec)) {
+      if (dir_ec) break;
+      std::string name = entry.path().filename().string();
+      std::string name_lower = name;
+      std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+      if (name_lower.find("morshu") != std::string::npos) {
+        REXLOG_INFO("Purging obsolete legacy prototype DLC: {}", entry.path().string());
+        std::error_code rm_ec;
+        std::filesystem::remove_all(entry.path(), rm_ec);
+        auto header_path = installed_headers_root / (name + ".header");
+        if (std::filesystem::exists(header_path)) {
+          std::filesystem::remove(header_path, rm_ec);
+        }
+      }
+    }
+  }
+
   const auto source_dirs =
       DiscoverDlcSourceDirectories(rex::filesystem::GetAppRootFolder(),
                                    runtime()->game_data_root(), runtime()->user_data_root());
@@ -1955,6 +1985,15 @@ void Skate3BaseApp::InstallDlcPackages() {
       }
 
       const auto package_path = entry.path();
+      const auto package_filename = package_path.filename().string();
+      std::string filename_lower = package_filename;
+      std::transform(filename_lower.begin(), filename_lower.end(), filename_lower.begin(), ::tolower);
+      if (filename_lower.find("morshu") != std::string::npos) {
+        REXLOG_INFO("Skipping obsolete prototype DLC package: {}", package_filename);
+        ++skipped_count;
+        continue;
+      }
+
       std::error_code canonical_ec;
       auto package_key = std::filesystem::weakly_canonical(package_path, canonical_ec).string();
       if (canonical_ec) {

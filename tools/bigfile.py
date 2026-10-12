@@ -146,6 +146,91 @@ def add_raw(b, folder, name, data):
     return e
 
 
+def build_fat_region(folders, files_with_ord):
+    strings = bytearray()
+    off_of = {}
+
+    def name_off(nm):
+        if nm not in off_of:
+            off_of[nm] = len(strings)
+            strings.extend(nm.encode('latin1') + b'\x00')
+        return off_of[nm]
+
+    all_dirs = set()
+    for fo in folders:
+        if fo in ('.', ''):
+            continue
+        parts = tuple(fo.split('/'))
+        for i in range(1, len(parts) + 1):
+            all_dirs.add(parts[:i])
+    sorted_dirs = sorted(list(all_dirs))
+
+    files_by_dir = {}
+    for fo, nm, ord_idx in files_with_ord:
+        dkey = () if fo in ('.', '') else tuple(fo.split('/'))
+        files_by_dir.setdefault(dkey, []).append((nm, ord_idx))
+
+    seq = []
+    for nm, ord_idx in sorted(files_by_dir.get((), [])):
+        seq.append(('file', (), nm, ord_idx))
+    for d in sorted_dirs:
+        seq.append(('dir', d))
+        for nm, ord_idx in sorted(files_by_dir.get(d, [])):
+            seq.append(('file', d, nm, ord_idx))
+
+    rows = [[0, 0, 0, 0, 0]]
+    ids = {}
+    for ev in seq:
+        if ev[0] == 'dir':
+            sub = ev[1]
+            if sub in ids:
+                continue
+            parent = 0 if len(sub) == 1 else ids[sub[:-1]]
+            ids[sub] = len(rows)
+            rows.append([name_off(sub[-1]), 0, parent, 0, 0])
+        else:
+            _, cur, nm, ord_idx = ev
+            parent = 0 if cur == () else ids[cur]
+            rows.append([name_off(nm), 1, parent, ord_idx, 0xFFFFFFFF])
+
+    kids = {}
+    for i, r in enumerate(rows):
+        if i:
+            kids.setdefault(r[2], []).append(i)
+
+    tbl = []
+    root_cnt = len(kids.get(0, []))
+    tbl += kids.get(0, [])[::-1]
+    running = root_cnt
+    done = set()
+    for ev in seq:
+        if ev[0] == 'dir':
+            sub = ev[1]
+            if sub not in ids or sub in done:
+                continue
+            done.add(sub)
+            rid = ids[sub]
+            cnt = len(kids.get(rid, []))
+            rows[rid][3] = cnt
+            rows[rid][4] = running
+            tbl += kids.get(rid, [])[::-1]
+            running += cnt
+    rows[0][3] = root_cnt
+    rows[0][4] = 0
+
+    body = struct.pack('>I', len(rows) * 20)
+    for r in rows:
+        body += struct.pack('>5I', *r)
+    body += struct.pack('>I', len(tbl) * 4)
+    for v in tbl:
+        body += struct.pack('>I', v)
+    body += struct.pack('>I', len(strings))
+    body += bytes(strings)
+    pad = (-len(body)) % 16
+    body += b'\0' * pad
+    return body
+
+
 def write(b, path):
     ents = sorted(b.entries, key=lambda e: djb2(e.path) if not e.folder.startswith('?') else e.hash1)
     for e in ents:
@@ -167,6 +252,13 @@ def write(b, path):
     names_size = ((len(names) + len(b.folder_region) + 0xF) & ~0xF) + 16
     fat_size = getattr(b, 'fat', 0)
     fat_region = getattr(b, 'fat_region', b'')
+    if fat_size > 0 or len(fat_region) > 0:
+        by_order = sorted(ents, key=lambda e: e.order)
+        ord_map = {(e.folder, e.name): idx for idx, e in enumerate(by_order)}
+        all_folders = list({e.folder for e in ents})
+        files_with_ord = [(e.folder, e.name, ord_map[(e.folder, e.name)]) for e in ents]
+        fat_region = build_fat_region(all_folders, files_with_ord)
+        fat_size = len(fat_region)
     payload_off = (names_off + names_size + fat_size + 0x3F) & ~0x3F
     body = bytearray()
     offs = {}
@@ -229,6 +321,24 @@ def write_delta(b, delta_path, stock_path=None):
     names_size = ((len(names) + len(b.folder_region) + 0xF) & ~0xF) + 16
     fat_size = getattr(b, 'fat', 0)
     fat_region = getattr(b, 'fat_region', b'')
+    if fat_size > 0 or len(fat_region) > 0:
+        new_names_end = (names_off + names_size + fat_size + 0x3F) & ~0x3F
+        offs = {}
+        cur = (stock_size + 0x3F) & ~0x3F
+        for e in ents:
+            needs_append = (not getattr(e, 'is_stock', True)) or getattr(e, 'modified', False) or (e.order < new_names_end)
+            if needs_append:
+                offs[id(e)] = cur
+                cur += len(e.data) + ((-len(e.data)) % 64)
+            else:
+                offs[id(e)] = e.order
+        by_order = sorted(ents, key=lambda e: offs[id(e)])
+        ord_map = {(e.folder, e.name): idx for idx, e in enumerate(by_order)}
+        all_folders = list({e.folder for e in ents})
+        files_with_ord = [(e.folder, e.name, ord_map[(e.folder, e.name)]) for e in ents]
+        fat_region = build_fat_region(all_folders, files_with_ord)
+        fat_size = len(fat_region)
+
     new_names_end = (names_off + names_size + fat_size + 0x3F) & ~0x3F
 
     offs = {}

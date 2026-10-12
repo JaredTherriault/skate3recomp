@@ -30,14 +30,12 @@ from pathlib import Path
 # Paths
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_DIR = Path(__file__).resolve().parent
-if str(TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(TOOLS_DIR))
 OTS_V2 = REPO_ROOT / 'analysis' / 'custom' / 'ots_v2'
-if str(OTS_V2) not in sys.path:
-    sys.path.insert(0, str(OTS_V2))
 XEX_DIR = REPO_ROOT / 'analysis' / 'xex'
-if str(XEX_DIR) not in sys.path:
-    sys.path.insert(0, str(XEX_DIR))
+for p in (XEX_DIR, OTS_V2, TOOLS_DIR):
+    if str(p) in sys.path:
+        sys.path.remove(str(p))
+    sys.path.insert(0, str(p))
 
 import bigfile                         # noqa: E402
 from s3hash import vlt64, loc_hash     # noqa: E402
@@ -106,6 +104,24 @@ TEMPLATE_IDS = [
     (0x000219c2, 0x03e38707), (0x000219c3, 0x03e38707), (0x000219c4, 0x03e38707),
 ]
 
+DLC_TEMPLATE_IDS = {
+    'ots_artg_01': [
+        (0x2c701706, 0x003d1360),
+        (0x2c701706, 0x003d1361),
+        (0x2c701706, 0x003d1371),
+    ],
+    'ots_dwmc_01': [
+        (0x00061b05, 0x03070d03),
+        (0x2c701706, 0x003d0bac),
+        (0x2c701706, 0x003d0bb5),
+    ],
+    'ots_mmcn_01': [
+        (0x2c701706, 0x003d0962),
+        (0x2c701706, 0x003d0972),
+        (0x2c701706, 0x003d0973),
+    ],
+}
+
 COLLS = [
     ('challenges', ''), ('challenge_global_data', ''),
     ('challenge_objectives_group', ''), ('challenge_objectives_group', '_0'),
@@ -131,7 +147,6 @@ DLC_CONFIGS = {
         'progression_all': 'dlc_dwmc_all',
         'rx2_path': 'data/content/global_locators/DLC_BAM/DLC_DW_MegaCompund/DLC_DW_MegaC_[0x5a77fc8428ce315e].rx2',
         'lang_file': 'data/fe/languages/english/LANGUAGE_English_danny_way_park_skate3ng-dlc_danny_way_park.BIN',
-        'scene_file': 'data/scene/scene_003.bin',
         'known_folders': [
             'data/content/missions/freeskate_dannyway_megacoumpound',
             'data/content/global_locators/DLC_BAM/DLC_DW_MegaCompund'
@@ -161,7 +176,6 @@ DLC_CONFIGS = {
         'progression_all': 'dlc_maloof_all',
         'rx2_path': 'data/content/global_locators/DLC_BAM/DIST_MaloofMoneyCupDLC/DIST_MaloofM_[0xf67e45e7a4b58ac4].rx2',
         'lang_file': 'data/fe/languages/english/LANGUAGE_English_maloofmc_skate3ng-dlc_maloofmc.BIN',
-        'scene_file': 'data/scene/scene_002.bin',
         'known_folders': [],
         'default_locators': [
             'street_mmcn_01_challengelocator_01',
@@ -184,7 +198,6 @@ DLC_CONFIGS = {
         'progression_all': 'dlc_play_all',
         'rx2_path': 'data/content/global_locators/DLC_BAM/DIST_AGPark/DIST_AGPark_[0x51909cc5f99f6b97].rx2',
         'lang_file': 'data/fe/languages/english/LANGUAGE_English_play_skate3ng-dlc_play.BIN',
-        'scene_file': 'data/scene/scene_006.bin',
         'known_folders': [
             'data/content/global_locators/DLC_BAM/DIST_AGPark',
             'data/content/global_locators/DLC_Park/Dist_Zen',
@@ -249,6 +262,31 @@ def id_map(num):
     for k, (hi, lo) in enumerate(TEMPLATE_IDS):
         m[(hi << 32) | lo] = ((0x000F0000 + num * 0x100 + k) << 32) | lo
     return m
+
+
+def dlc_id_map(template, num):
+    tpl_ids = DLC_TEMPLATE_IDS.get(template, [])
+    m = {}
+    for k, (hi, lo) in enumerate(tpl_ids):
+        m[(hi << 32) | lo] = ((0x000E0000 + num * 0x100 + k) << 32) | lo
+    return m
+
+
+def dlc_text_map(spot, template):
+    tpl_prefix = template[:-2]
+    num = spot.get('num', 1)
+    n = spot.get('id', f"{tpl_prefix}%02d" % num)
+    loc = spot.get('locator', template + '_challengelocator_01')
+    subs = [
+        (template + '_challengelocator_01', loc),
+        (template, n),
+        (template.upper(), n.upper()),
+        (template.capitalize(), n.capitalize()),
+    ]
+    for old, new in dlc_id_map(template, num).items():
+        subs.append(('0x%016x' % old, '0x%016x' % new))
+        subs.append(('%d' % old, '%d' % new))
+    return [(a.encode(), b.encode()) for a, b in subs]
 
 
 def text_map(spot, template=None):
@@ -670,6 +708,7 @@ def build_loc(mb, spots):
     out = update_loc_data(d, spots)
     enc = refpack_literals(out)
     e.data, e.csize, e.size, e.ctype = enc, len(enc), len(out), 1
+    e.modified = True
 
     # scene_000.bin
     sc_entry = bigfile.find(mb, 'data/scene/scene_000.bin')
@@ -690,6 +729,7 @@ def build_loc(mb, spots):
     struct.pack_into('>I', sc_out, 8, sc_c1 + len(spots))
     sc_enc = refpack_literals(bytes(sc_out))
     sc_entry.data, sc_entry.csize, sc_entry.size, sc_entry.ctype = sc_enc, len(sc_enc), len(sc_out), 1
+    sc_entry.modified = True
 
 
 def resolve_base_locators(spots):
@@ -995,17 +1035,16 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
     cbin = bigfile.entry_bytes(bigfile.find(b, cfg['challenge_bank'] + '.bin'))
     v = Vault(cvlt, cbin)
     for spot in spots:
-        n = spot.get('id', f"{tpl[:-2]}%02d" % spot['num'])
+        num = spot.get('num', 1)
+        n = spot.get('id', f"{tpl[:-2]}%02d" % num)
         specs = [(c, tpl + s, n + s) for c, s in COLLS]
-        km = {vlt64(tpl + s): vlt64(n + s) for s in ('', '_0', '_1')}
-        loc_target = spot.get('locator', f"{n}_challengelocator_01")
+        km = dict(dlc_id_map(tpl, num))
+        for s in ('', '_0', '_1'):
+            km[vlt64(tpl + s)] = vlt64(n + s)
+        subs = dlc_text_map(spot, tpl)
         clone_collections(
             v, specs, {tpl: n}, km,
-            lambda s, tpl=tpl, n=n, loc_target=loc_target: (
-                s.replace((tpl + '_challengelocator_01').encode(), loc_target.encode())
-                 .replace(tpl.encode(), n.encode())
-                 .replace(tpl.upper().encode(), n.upper().encode())
-            )
+            lambda s, subs=subs: apply_text(s, subs)
         )
         scores = spot.get('scores', {})
         if scores:
@@ -1028,20 +1067,21 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
     lvlt = bigfile.entry_bytes(bigfile.find(b, f'data/db/challenge_local_data/{tpl}.vlt'))
     lbin = bigfile.entry_bytes(bigfile.find(b, f'data/db/challenge_local_data/{tpl}.bin'))
     for spot in spots:
-        n = spot.get('id', f"{tpl[:-2]}%02d" % spot['num'])
+        num = spot.get('num', 1)
+        n = spot.get('id', f"{tpl[:-2]}%02d" % num)
+        subs = dlc_text_map(spot, tpl)
         lv, lb = bytearray(lvlt), bytearray(lbin)
-        um = {vlt64(tpl + s): vlt64(n + s) for s in ('', '_0', '_1')}
+        um = dict(dlc_id_map(tpl, num))
+        for s in ('', '_0', '_1'):
+            um[vlt64(tpl + s)] = vlt64(n + s)
         um[vlt64(tpl + '.vlt')] = vlt64(n + '.vlt')
         um[vlt64(tpl + '.bin')] = vlt64(n + '.bin')
         um[vlt64('challenge_local_data/' + tpl)] = vlt64('challenge_local_data/' + n)
         replace_u64(lv, um)
         replace_u64(lb, um)
-        lv2 = (bytes(lv).replace(tpl.encode(), n.encode())
-                        .replace(tpl.upper().encode(), n.upper().encode())
-                        .replace(tpl.capitalize().encode(), n.capitalize().encode()))
-        lb2 = (bytes(lb).replace(tpl.encode(), n.encode())
-                        .replace(tpl.upper().encode(), n.upper().encode())
-                        .replace(tpl.capitalize().encode(), n.capitalize().encode()))
+        lv2 = apply_text(bytes(lv), subs)
+        lb2 = apply_text(bytes(lb), subs)
+        assert len(lv2) == len(lv) and len(lb2) == len(lb)
         bigfile.add_raw(b, 'data/db/challenge_local_data', n + '.vlt', lv2)
         bigfile.add_raw(b, 'data/db/challenge_local_data', n + '.bin', lb2)
 
@@ -1088,6 +1128,7 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
                         guids.add(struct.unpack_from('>Q', dec, o + 4)[0])
                         o = dec.find(b'\xfe\xff\xff\xff', o + 4)
                     gmap = {g: vlt64('%s:%016x' % (n, g)) for g in guids}
+                    gmap.update(dlc_id_map(tpl, spot.get('num', 1)))
                     dec_ba = bytearray(dec)
                     replace_u64(dec_ba, gmap)
                     if dx != 0.0 or dy != 0.0 or dz != 0.0:
@@ -1166,29 +1207,41 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
     if loc_entry:
         ld = bigfile.entry_bytes(loc_entry)
         out_loc = update_loc_data(ld, spots)
-        enc = refpack_literals(out_loc)
-        loc_entry.data, loc_entry.csize, loc_entry.size, loc_entry.ctype = enc, len(enc), len(out_loc), 1
+        if getattr(loc_entry, 'ctype', 0) == 0:
+            loc_entry.data = out_loc
+            loc_entry.size = len(out_loc)
+            loc_entry.csize = 0
+            loc_entry.ctype = 0
+        else:
+            enc = refpack_literals(out_loc)
+            loc_entry.data, loc_entry.csize, loc_entry.size, loc_entry.ctype = enc, len(enc), len(out_loc), 1
+        loc_entry.modified = True
 
     # 7. Scene intro
-    sc_entry = bigfile.find(b, cfg['scene_file'])
-    if sc_entry:
-        sc_d = bytearray(bigfile.entry_bytes(sc_entry))
-        sc_magic, sc_ver, sc_c1, sc_c2 = struct.unpack_from('>4sIII', sc_d, 0)
-        sc_sec1_end = 16 + sc_c1 * 104
-        new_recs = bytearray()
-        for spot in spots:
-            sn = spot.get('id', f"{tpl[:-2]}%02d" % spot['num'])
-            name = f'{sn}_intro'
-            h = loc_hash(name)
-            rec = bytearray(104)
-            struct.pack_into('>10I', rec, 0, h, 0x0c000000, 0, 0, 0, 0, 0, 0xbf800000, 0x40e00000, 1259)
-            name_bytes = name.encode('latin1') + b'\0'
-            rec[0x28:0x28 + len(name_bytes)] = name_bytes
-            new_recs += rec
-        sc_out = sc_d[:sc_sec1_end] + new_recs + sc_d[sc_sec1_end:]
-        struct.pack_into('>I', sc_out, 8, sc_c1 + len(spots))
-        sc_enc = refpack_literals(bytes(sc_out))
-        sc_entry.data, sc_entry.csize, sc_entry.size, sc_entry.ctype = sc_enc, len(sc_enc), len(sc_out), 1
+    scene_file = cfg.get('scene_file')
+    if scene_file:
+        sc_entry = bigfile.find(b, scene_file)
+        if sc_entry:
+            sc_d = bytearray(bigfile.entry_bytes(sc_entry))
+            sc_magic, sc_ver, sc_c1, sc_c2 = struct.unpack_from('>4sIII', sc_d, 0)
+            sc_sec1_end = 16 + sc_c1 * 104
+            new_recs = bytearray()
+            for spot in spots:
+                sn = spot.get('id', f"{tpl[:-2]}%02d" % spot['num'])
+                name = f'{sn}_intro'
+                h = loc_hash(name)
+                rec = bytearray(104)
+                struct.pack_into('>10I', rec, 0, h, 0x0c000000, 0, 0, 0, 0, 0, 0xbf800000, 0x40e00000, 1259)
+                name_bytes = name.encode('latin1') + b'\0'
+                rec[0x28:0x28 + len(name_bytes)] = name_bytes
+                new_recs += rec
+            sc_out = sc_d[:sc_sec1_end] + new_recs + sc_d[sc_sec1_end:]
+            struct.pack_into('>I', sc_out, 8, sc_c1 + len(spots))
+            sc_entry.data = bytes(sc_out)
+            sc_entry.csize = 0
+            sc_entry.size = len(sc_out)
+            sc_entry.ctype = 0
+            sc_entry.modified = True
 
     # 8. World Locators (RX2 and XML LOCs)
     rx2_path = cfg.get('rx2_path')
@@ -1202,20 +1255,22 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
             rx2_entry.size = len(rx2_data)
             rx2_entry.csize = 0
             rx2_entry.ctype = 0
+            rx2_entry.modified = True
 
         # BAM .loc XML
         loc_path = rx2_path.replace('.rx2', '.loc')
-        loc_entry = bigfile.find(b, loc_path)
-        if loc_entry:
-            loc_data = bigfile.entry_bytes(loc_entry)
+        loc_xml_entry = bigfile.find(b, loc_path)
+        if loc_xml_entry:
+            loc_data = bigfile.entry_bytes(loc_xml_entry)
             for spot in spots:
                 loc_target = spot.get('locator')
                 if loc_target:
                     loc_data = update_xml_location(loc_data, loc_target, spot['site'])
-            loc_entry.data = loc_data
-            loc_entry.size = len(loc_data)
-            loc_entry.csize = 0
-            loc_entry.ctype = 0
+            loc_xml_entry.data = loc_data
+            loc_xml_entry.size = len(loc_data)
+            loc_xml_entry.csize = 0
+            loc_xml_entry.ctype = 0
+            loc_xml_entry.modified = True
 
         # Stream _Sim.loc XMLs
         for stream_entry in b.entries:
@@ -1229,6 +1284,7 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
                 stream_entry.size = len(s_data)
                 stream_entry.csize = 0
                 stream_entry.ctype = 0
+                stream_entry.modified = True
 
     # Write out delta
     delta_name = cfg['custom_big'].replace('.big', '.delta')
