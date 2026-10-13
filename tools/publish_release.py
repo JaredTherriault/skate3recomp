@@ -78,7 +78,7 @@ def build_linux():
 
 
 def package_clean_zip(zip_path, folder_name, files):
-    """Create a clean zip archive with files placed under folder_name/."""
+    """Create a clean zip archive with files optionally placed under folder_name/."""
     print(f"Packaging {zip_path.name}...")
     if zip_path.exists():
         zip_path.unlink()
@@ -88,7 +88,7 @@ def package_clean_zip(zip_path, folder_name, files):
             if not src_path.exists():
                 print(f"Error: Required file {src_path} is missing!", file=sys.stderr)
                 sys.exit(1)
-            archive_name = f"{folder_name}/{target_rel}"
+            archive_name = f"{folder_name}/{target_rel}" if folder_name else target_rel
             zf.write(src_path, archive_name)
 
     size_mb = zip_path.stat().st_size / (1024 * 1024)
@@ -131,26 +131,12 @@ def main():
     # Step 2: Ensure distribution directory exists
     DIST_DIR.mkdir(exist_ok=True)
 
-    extra_files = []
-    for folder in ['mods/raw', 'tools']:
-        fdir = REPO_ROOT / folder
-        if fdir.is_dir() and not fdir.is_symlink():
-            for p in fdir.rglob('*'):
-                if p.is_file() and not p.name.startswith('.') and p.suffix not in ('.pyc', '.pyo') and '__pycache__' not in p.parts:
-                    rel = p.relative_to(REPO_ROOT)
-                    extra_files.append((p, str(rel)))
-
-    compiled_dir = REPO_ROOT / 'mods' / 'compiled'
-    compiled_dir.mkdir(parents=True, exist_ok=True)
-    keep = compiled_dir / '.gitkeep'
-    keep.touch()
-    extra_files.append((keep, 'mods/compiled/.gitkeep'))
     # Step 3: Package Linux Archive (Skate3Recomp-Linux.zip)
     linux_zip = DIST_DIR / 'Skate3Recomp-Linux.zip'
     linux_files = [
         (BUILD_DIR / 'skate3', 'skate3'),
         (BUILD_DIR / 'librexruntime.so', 'librexruntime.so'),
-    ] + extra_files
+    ]
     package_clean_zip(linux_zip, 'Skate3Recomp-Linux', linux_files)
 
     # Step 4: Package Windows Archive (Skate3Recomp-Windows.zip)
@@ -169,18 +155,34 @@ def main():
     win_files = [
         (WINDOWS_BIN_DIR / 'skate3.exe', 'skate3.exe'),
         (WINDOWS_BIN_DIR / 'rexruntime.dll', 'rexruntime.dll'),
-    ] + extra_files
+    ]
     package_clean_zip(win_zip, 'Skate3Recomp-Windows', win_files)
+
+    # Step 5: Package Separate Mods Archive (Skate3Recomp-Mods.zip)
+    mods_zip = DIST_DIR / 'Skate3Recomp-Mods.zip'
+    mod_files = []
+    for folder in ['mods', 'tools']:
+        fdir = REPO_ROOT / folder
+        if fdir.is_dir() and not fdir.is_symlink():
+            for p in fdir.rglob('*'):
+                if not p.is_file():
+                    continue
+                if p.name in ('publish_release.py', '.DS_Store') or p.name.endswith(('.pyc', '.pyo')) or '__pycache__' in p.parts:
+                    continue
+                rel = p.relative_to(REPO_ROOT)
+                mod_files.append((p, str(rel)))
+    package_clean_zip(mods_zip, None, mod_files)
 
     print("\nClean, retail-free release archives ready in dist/:")
     print(f"  - {linux_zip.name} ({linux_zip.stat().st_size / (1024*1024):.1f} MB)")
     print(f"  - {win_zip.name} ({win_zip.stat().st_size / (1024*1024):.1f} MB)")
+    print(f"  - {mods_zip.name} ({mods_zip.stat().st_size / (1024*1024):.1f} MB)")
 
     if args.dry_run:
         print("\n[Dry Run] Skipping git tag and GitHub release creation.")
         return
 
-    # Step 5: Create and push git tag
+    # Step 6: Create and push git tag
     print(f"\nCreating git tag '{tag}'...")
     run_cmd(['git', 'tag', '-f', tag])
     print(f"Pushing tag '{tag}' to origin...")
@@ -189,7 +191,7 @@ def main():
     target_repo = get_target_repo()
     print(f"Target GitHub repository: {target_repo}")
 
-    # Step 6: Create or update GitHub Release
+    # Step 7: Create or update GitHub Release
     print(f"\nPublishing release '{tag}' to GitHub via gh...")
     # Check if release exists
     check_release = run_cmd(['gh', 'release', 'view', tag, '-R', target_repo], check=False)
@@ -199,6 +201,7 @@ def main():
             'gh', 'release', 'upload', tag,
             str(linux_zip),
             str(win_zip),
+            str(mods_zip),
             '-R', target_repo,
             '--clobber'
         ])
@@ -208,6 +211,7 @@ def main():
             'gh', 'release', 'create', tag,
             str(linux_zip),
             str(win_zip),
+            str(mods_zip),
             '-R', target_repo,
             '--title', title,
             '--notes', notes
