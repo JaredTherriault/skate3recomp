@@ -511,8 +511,21 @@ void GetCapturedSunDir(float out[3]);
 // camera world position and returns true (false = guest camera in control).
 // Consumed by the draw-distance hooks to recenter distance culls on the
 // drone; the render camera itself is taken over via the ViewCamera::
-// SetViewMatrix override in skate3_native_scene.cpp.
 bool FreecamGuestPose(float out_pos[3]);
+
+struct FreecamGamepadInput {
+  float move_f = 0.0f;     // forward (+) / backward (-)
+  float move_r = 0.0f;     // right (+) / left (-)
+  float move_u = 0.0f;     // up (+) / down (-) (triggers: RT - LT)
+  float look_yaw = 0.0f;   // right thumbstick X (-1 to 1)
+  float look_pitch = 0.0f; // right thumbstick Y (-1 to 1)
+  float speed_mult = 1.0f; // speed boost
+};
+
+void SetFreecamActive(bool active);
+bool IsFreecamActive();
+void SetFreecamGamepadInput(const FreecamGamepadInput& input);
+bool GetFreecamPose(float out_pos[3], float out_fwd[3]);
 
 // True while the guest sits on a loading screen or in the frontend: the
 // presence context is out of gameplay AND the world has stopped publishing

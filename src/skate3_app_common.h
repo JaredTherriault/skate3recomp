@@ -14,6 +14,7 @@
 #include <rex/ui/overlay/simple_settings_overlay.h>
 
 #include "skate3_native_debug_dialog.h"
+#include "skate3_challenge_editor_dialog.h"
 
 namespace rex::ui {
 class ImGuiDrawer;
@@ -41,6 +42,7 @@ class Skate3BaseApp : public rex::ReXApp {
   void InstallDlcPackages();
   void ToggleSimpleSettings();
   void ToggleNativeDebug();
+  void ToggleChallengeEditor();
   void ApplySettingsCursorMode();
   void ApplyGameplayCursorMode();
   void RestartGame();
@@ -60,6 +62,7 @@ class Skate3BaseApp : public rex::ReXApp {
   std::filesystem::path profiles_path_;
   std::unique_ptr<rex::ui::SimpleSettingsDialog> simple_settings_dialog_;
   std::unique_ptr<skate3::NativeDebugDialog> native_debug_dialog_;
+  std::unique_ptr<skate3::ChallengeEditorDialog> challenge_editor_dialog_;
   std::unique_ptr<skate3::RenderModeIndicator> render_mode_indicator_;
   bool recipe_overlay_installed_ = false;
   bool big_device_aliases_installed_ = false;

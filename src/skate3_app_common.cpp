@@ -746,9 +746,13 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
                         "Toggle native/emulated renderer", [] {
                           skate3::native_scene::ToggleSceneEnabled();
                         });
-  rex::ui::RegisterBind("bind_skate3_save_draw_fingerprints", "F8",
+  rex::ui::RegisterBind("bind_skate3_save_draw_fingerprints", "Ctrl+F8",
                         "Save draw fingerprint log", [this] {
                           SaveDrawFingerprintLog();
+                        });
+  rex::ui::RegisterBind("bind_skate3_challenge_editor", "F8",
+                        "Challenge Editor (Freecam)", [this] {
+                          ToggleChallengeEditor();
                         });
   rex::ui::RegisterBind("bind_skate3_log_debug_marker", "F9",
                         "Write debug marker to log", [this] {
@@ -791,13 +795,14 @@ void Skate3BaseApp::OnPostSetup() {
   if (auto* input_system = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
     input_system->SetActiveCallback([this]() {
       const bool settings_visible = simple_settings_dialog_ && simple_settings_dialog_->visible();
+      const bool challenge_editor_visible = challenge_editor_dialog_ && challenge_editor_dialog_->visible();
       const bool xam_ui_active = rex::kernel::xam::xeXamIsUIActive();
       // The drone cam owns the keyboard while flying: keep guest input off
       // so the fly keys don't also steer the skater.
       const bool freecam_captures =
           REXCVAR_GET(skate3_native_render_scene_freecam) &&
           REXCVAR_GET(skate3_native_render_scene_freecam_capture_input);
-      return !settings_visible && !xam_ui_active && !freecam_captures;
+      return !settings_visible && !challenge_editor_visible && !xam_ui_active && !freecam_captures;
     });
     input_system->SetMenuChordCallback([this]() {
       app_context().CallInUIThreadDeferred([this]() { ToggleSimpleSettings(); });
@@ -862,6 +867,7 @@ void Skate3BaseApp::OnShutdown() {
   rex::ui::UnregisterBind("bind_skate3_menu");
   rex::ui::UnregisterBind("bind_skate3_menu_alt");
   rex::ui::UnregisterBind("bind_skate3_save_draw_fingerprints");
+  rex::ui::UnregisterBind("bind_skate3_challenge_editor");
   rex::ui::UnregisterBind("bind_skate3_log_debug_marker");
   rex::ui::UnregisterBind("bind_skate3_log_user_marker");
   rex::ui::UnregisterBind("bind_skate3_native_debug");
@@ -869,6 +875,7 @@ void Skate3BaseApp::OnShutdown() {
   skate3::native_scene::SetSettingsMenuBlur(false);
   simple_settings_dialog_.reset();
   native_debug_dialog_.reset();
+  challenge_editor_dialog_.reset();
   render_mode_indicator_.reset();
 }
 
@@ -1085,6 +1092,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
           imgui_drawer(), user_settings_path_, std::move(load_profiles), std::move(save_profile),
           std::move(close_settings), std::move(close_game), std::move(restart_game),
           std::move(poll_gamepad), std::move(load_mods), std::move(save_mods));
+  simple_settings_dialog_->SetOpenChallengeEditorCallback([this]() {
+    ToggleChallengeEditor();
+  });
   ApplySettingsCursorMode();
   skate3::native_scene::SetSettingsMenuBlur(true);
   simple_settings_dialog_->Show();
@@ -1100,6 +1110,33 @@ void Skate3BaseApp::ToggleNativeDebug() {
   } else {
     ApplySettingsCursorMode();
     native_debug_dialog_->Show();
+  }
+}
+
+void Skate3BaseApp::ToggleChallengeEditor() {
+  if (!challenge_editor_dialog_) {
+    auto poll_gamepad = [this](rex::input::X_INPUT_GAMEPAD* out_pad) -> bool {
+      auto* rt = runtime();
+      auto* input_system =
+          rt ? static_cast<rex::input::InputSystem*>(rt->input_system()) : nullptr;
+      if (input_system && out_pad) {
+        return input_system->GetUiGamepadState(out_pad);
+      }
+      return false;
+    };
+    challenge_editor_dialog_ =
+        std::make_unique<skate3::ChallengeEditorDialog>(imgui_drawer(), std::move(poll_gamepad));
+  }
+
+  if (challenge_editor_dialog_->visible()) {
+    challenge_editor_dialog_->Hide();
+    ApplyGameplayCursorMode();
+  } else {
+    if (simple_settings_dialog_ && simple_settings_dialog_->visible()) {
+      simple_settings_dialog_->Hide();
+    }
+    ApplySettingsCursorMode();
+    challenge_editor_dialog_->Show();
   }
 }
 

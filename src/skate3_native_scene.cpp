@@ -6168,6 +6168,9 @@ struct FreecamState {
 #endif
 };
 FreecamState g_freecam;
+std::mutex g_freecam_input_mutex;
+FreecamGamepadInput g_freecam_gamepad_input;
+float g_freecam_last_fwd[3] = {0.0f, 0.0f, 1.0f};
 
 // Guest render thread only. Returns true while engaged; scene.view_proj,
 // scene.proj and scene.cam_pos then hold the flown pose.
@@ -6264,6 +6267,18 @@ bool UpdateFreecam(FrameScene& scene, const float cam_view[16], double now) {
   }
 #endif
 
+  {
+    std::lock_guard<std::mutex> lock(g_freecam_input_mutex);
+    mv_f += double(g_freecam_gamepad_input.move_f);
+    mv_r += double(g_freecam_gamepad_input.move_r);
+    mv_u += double(g_freecam_gamepad_input.move_u);
+    lk_yaw += double(g_freecam_gamepad_input.look_yaw);
+    lk_pitch += double(g_freecam_gamepad_input.look_pitch);
+    if (g_freecam_gamepad_input.speed_mult > 0.0f) {
+      speed_mult *= double(g_freecam_gamepad_input.speed_mult);
+    }
+  }
+
   // Look: arrow keys drive a smoothed angular velocity (cinematic ease-in/
   // out); mouse deltas apply directly. Pitch is clamped short of the poles.
   const double look_rate =
@@ -6287,6 +6302,10 @@ bool UpdateFreecam(FrameScene& scene, const float cam_view[16], double now) {
   const double cy = std::cos(fc.yaw), sy = std::sin(fc.yaw);
   const double cp = std::cos(fc.pitch), sp = std::sin(fc.pitch);
   const float fwd[3] = {float(sy * cp), float(sp), float(cy * cp)};
+  {
+    std::lock_guard<std::mutex> lock(g_freecam_guest_mutex);
+    std::memcpy(g_freecam_last_fwd, fwd, sizeof(fwd));
+  }
   const float right[3] = {float(cy) * fc.sign_right, 0.0f,
                           float(-sy) * fc.sign_right};
   const float up[3] = {float(-sp * sy) * fc.sign_right * fc.sign_up,
@@ -6360,6 +6379,33 @@ bool FreecamGuestPose(float out_pos[3]) {
   }
   std::lock_guard<std::mutex> lock(g_freecam_guest_mutex);
   std::memcpy(out_pos, g_freecam_guest_pos, 3 * sizeof(float));
+  return true;
+}
+
+void SetFreecamActive(bool active) {
+  REXCVAR_SET(skate3_native_render_scene_freecam, active);
+}
+
+bool IsFreecamActive() {
+  return REXCVAR_GET(skate3_native_render_scene_freecam);
+}
+
+void SetFreecamGamepadInput(const FreecamGamepadInput& input) {
+  std::lock_guard<std::mutex> lock(g_freecam_input_mutex);
+  g_freecam_gamepad_input = input;
+}
+
+bool GetFreecamPose(float out_pos[3], float out_fwd[3]) {
+  if (g_freecam_guest_active.load(std::memory_order_acquire) == 0) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_freecam_guest_mutex);
+  if (out_pos) {
+    std::memcpy(out_pos, g_freecam_guest_pos, 3 * sizeof(float));
+  }
+  if (out_fwd) {
+    std::memcpy(out_fwd, g_freecam_last_fwd, 3 * sizeof(float));
+  }
   return true;
 }
 
