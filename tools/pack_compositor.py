@@ -843,23 +843,24 @@ def resolve_base_locators(spots):
             if npt and base + npt < len(d):
                 recs.add(cs(base + npt))
 
-        used = set()
+        claimed = set()
         for spot in d_spots:
             loc = spot.get('locator')
-            if loc and loc in recs:
-                used.add(loc)
+            if loc and loc in recs and loc not in claimed:
+                claimed.add(loc)
+            else:
+                spot['locator'] = None
 
         for spot in d_spots:
-            loc = spot.get('locator')
-            if not loc or loc not in recs:
-                avail = [l for l in cfg['default_locators'] if l in recs and l not in used]
+            if not spot.get('locator'):
+                avail = [l for l in cfg['default_locators'] if l in recs and l not in claimed]
                 if avail:
                     loc = avail[0]
                 else:
-                    unclaimed = [l for l in recs if l not in used]
+                    unclaimed = [l for l in recs if l not in claimed]
                     loc = unclaimed[0] if unclaimed else (list(recs)[0] if recs else '')
                 spot['locator'] = loc
-                used.add(loc)
+                claimed.add(loc)
 
 
 def build_rx2(out_dir, spots):
@@ -1082,24 +1083,25 @@ def resolve_dlc_locators(b, cfg, spots):
         if npt and base + npt < len(d):
             recs.add(cs(base + npt))
 
-    used = set()
+    claimed = set()
     for spot in spots:
         loc = spot.get('locator')
-        if loc and loc in recs:
-            used.add(loc)
+        if loc and loc in recs and loc not in claimed:
+            claimed.add(loc)
+        else:
+            spot['locator'] = None
 
     defaults = cfg.get('default_locators', [])
     for spot in spots:
-        loc = spot.get('locator')
-        if not loc or loc not in recs:
-            avail = [l for l in defaults if l in recs and l not in used]
+        if not spot.get('locator'):
+            avail = [l for l in defaults if l in recs and l not in claimed]
             if avail:
                 loc = avail[0]
             else:
-                unclaimed = [l for l in recs if l not in used]
+                unclaimed = [l for l in recs if l not in claimed]
                 loc = unclaimed[0] if unclaimed else (list(recs)[0] if recs else '')
             spot['locator'] = loc
-            used.add(loc)
+            claimed.add(loc)
 
 
 def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
@@ -1493,32 +1495,95 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
     # 1. Compute per-pack hashes
     pack_hashes = {p['id']: hash_raw_pack(p) for p in enabled_packs}
 
-    # 2. Collect spots and group by target container
+    # 2. Collect spots and group by target container with automatic conflict resolution & auto-generation
     all_spots = []
     pack_dirs_by_spot = {}
-    seen_spot_ids = set()
-    seen_locators = set()
     spots_by_target = collections.defaultdict(list)
 
+    CONTAINER_START_NUMS = {
+        'base': 16,
+        'dannyway': 2,
+        'maloof': 2,
+        'play': 2,
+    }
+
+    # Pass 1: Collect spots, assign defaults for missing optional fields
     for p in enabled_packs:
         for s in p['spots']:
             s['pack_id'] = p['id']
-            num = s.get('num', 1)
             dist = get_spot_district(s)
-            dist_cfg = BASE_DISTRICT_CONFIGS.get(dist, BASE_DISTRICT_CONFIGS['dist_university'])
-            spot_id = s.get('id', f"{dist_cfg['template'][:-2]}%02d" % num)
-            if spot_id in seen_spot_ids:
-                raise ValueError(f"Duplicate spot ID '{spot_id}' in pack '{p['id']}'")
-            seen_spot_ids.add(spot_id)
-            loc = s.get('locator')
-            if loc and loc in seen_locators:
-                raise ValueError(f"Duplicate locator '{loc}' in spot '{spot_id}'")
-            if loc:
-                seen_locators.add(loc)
-            all_spots.append(s)
-            pack_dirs_by_spot[spot_id] = p['path']
+            s['district'] = dist
             target = get_spot_target(s)
+
+            # Default optional fields
+            s.setdefault('runway', 16.0)
+            s.setdefault('desc', "Lay down your best lines here to own this spot.")
+            s.setdefault('scores', {'own': 600, 'kill': 1000})
+
+            # Auto-calculate camera if omitted
+            if 'cam' not in s and 'site' in s:
+                sx, sy, sz = s['site']
+                s['cam'] = [round(sx - 4.0, 2), round(sy + 2.5, 2), round(sz - 4.0, 2)]
+
+            all_spots.append(s)
             spots_by_target[target].append(s)
+
+    # Pass 2: Auto-assign num and id per target container to prevent any collision
+    for target, t_spots in spots_by_target.items():
+        used_nums = set()
+        used_ids = set()
+        start_num = CONTAINER_START_NUMS.get(target, 2)
+        next_num = start_num
+
+        # First pass: preserve valid, non-conflicting explicit numbers and IDs
+        for s in t_spots:
+            dist = s['district']
+            dist_cfg = BASE_DISTRICT_CONFIGS.get(dist, BASE_DISTRICT_CONFIGS['dist_university'])
+            tpl = dist_cfg['template'] if target == 'base' else DLC_CONFIGS[target]['template']
+            tpl_prefix = tpl[:-2]
+
+            req_num = s.get('num')
+            req_id = s.get('id')
+
+            if isinstance(req_num, int) and req_num >= start_num and req_num not in used_nums:
+                candidate_id = req_id if req_id else f"{tpl_prefix}%02d" % req_num
+                if candidate_id not in used_ids:
+                    s['num'] = req_num
+                    s['id'] = candidate_id
+                    used_nums.add(req_num)
+                    used_ids.add(candidate_id)
+                    continue
+
+            # Clear conflicting or missing identifiers for auto-assignment
+            s['num'] = None
+            s['id'] = None
+
+        # Second pass: auto-assign sequential numbers and IDs
+        for s in t_spots:
+            if s.get('num') is not None and s.get('id') is not None:
+                continue
+
+            dist = s['district']
+            dist_cfg = BASE_DISTRICT_CONFIGS.get(dist, BASE_DISTRICT_CONFIGS['dist_university'])
+            tpl = dist_cfg['template'] if target == 'base' else DLC_CONFIGS[target]['template']
+            tpl_prefix = tpl[:-2]
+
+            while next_num in used_nums:
+                next_num += 1
+
+            candidate_id = f"{tpl_prefix}%02d" % next_num
+            while candidate_id in used_ids:
+                next_num += 1
+                candidate_id = f"{tpl_prefix}%02d" % next_num
+
+            s['num'] = next_num
+            s['id'] = candidate_id
+            used_nums.add(next_num)
+            used_ids.add(candidate_id)
+            next_num += 1
+
+        for s in t_spots:
+            pack_dirs_by_spot[s['id']] = next(p['path'] for p in enabled_packs if p['id'] == s['pack_id'])
 
     # 3. Compute per-target composite hashes
     current_target_hashes = {}
