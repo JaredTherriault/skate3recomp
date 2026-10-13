@@ -1582,6 +1582,7 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
                 k = f"{base_k}_{suffix}"
             seen_keys_in_pack.add(k)
             s['_reg_key'] = f"{p['id']}:{k}"
+            s['_orig_req_num'] = s.get('num')
 
             # Default optional fields
             s.setdefault('runway', 16.0)
@@ -1620,7 +1621,9 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
 
             if isinstance(req_num, int) and req_num >= start_num and req_num not in used_nums:
                 candidate_id = req_id if req_id else f"{tpl_prefix}%02d" % req_num
-                if candidate_id not in used_ids:
+                # Prevent hijacking an ID already registered to a different spot in the user's registry
+                reg_owner = next((k for k, v in target_regs.items() if (v.get('num') == req_num or v.get('id') == candidate_id) and k != s['_reg_key']), None)
+                if not reg_owner and candidate_id not in used_ids:
                     s['num'] = req_num
                     s['id'] = candidate_id
                     used_nums.add(req_num)
@@ -1655,6 +1658,7 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
             if s.get('num') is not None and s.get('id') is not None:
                 continue
 
+            orig_requested_num = s.get('num')
             dist = s['district']
             dist_cfg = BASE_DISTRICT_CONFIGS.get(dist, BASE_DISTRICT_CONFIGS['dist_university'])
             tpl = dist_cfg['template'] if target == 'base' else DLC_CONFIGS[target]['template']
@@ -1675,6 +1679,11 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
             all_registered_nums.add(next_num)
             all_registered_ids.add(candidate_id)
             next_num += 1
+
+            # Inform user/modder if an explicitly requested number had to be resolved
+            req = s.get('_orig_req_num')
+            if req is not None and req != s['num']:
+                print(f"  * Note: Spot '{s.get('title', s['id'])}' in '{s['pack_id']}' requested num {req} which was already claimed; resolved to {s['num']} ({s['id']}).")
 
         # 2d: Update registry mapping for active spots in this container
         for s in t_spots:
