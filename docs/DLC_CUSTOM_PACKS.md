@@ -126,14 +126,11 @@ python3 tools/pack_manager.py scaffold artg_mod --name "Art Gallery Mod" --distr
   "enabled": true,
   "spots": [
     {
-      "id": "ots_dwmc_03",
-      "num": 3,
+      "key": "mega_ramp_gap",
       "title": "Mega Ramp Gap",
       "desc": "Drop in and launch over the mega gap to own Danny Way's Hawaiian Dream.",
       "district": "dist_dannyway",
       "site": [137.31, -17.27, -23.23],
-      "cam": [135.0, -16.0, -25.0],
-      "locator": "ots_dwmc_01_challengelocator_01",
       "runway": 16.0,
       "scores": {
         "own": 800,
@@ -144,15 +141,20 @@ python3 tools/pack_manager.py scaffold artg_mod --name "Art Gallery Mod" --distr
 }
 ```
 
-### Key Spot Attributes:
-- **`district`**: The target DLC or base game district (`dist_university`, `dist_dannyway`, `dist_maloof`, `dist_artgallery`, etc.).
+### Spot Attributes:
+- **`key`** *(Optional, Recommended)*: A unique identifier for the spot within your pack (e.g. `"mega_ramp_gap"` or `"cloud69_snoop_ledge"`). This allows you to safely rename the spot's display `title` in future pack updates without breaking players' career save game progress. If omitted, the compositor defaults to using `title`.
+- **`title`**: The display name of the spot in menus and challenge banners. Supports per-language dictionaries or a plain string.
+- **`desc`**: The challenge description shown on the intro screen and pause menu.
+- **`district`**: The target DLC or base game district (`university`, `downtown`, `industrial`, `dannyway`, `maloof`, `play`, etc.).
 - **`site`**: `[X, Y, Z]` coordinates of the obstacle prop / scoring area.
-- **`cam`**: `[X, Y, Z]` coordinates of the camera capture position.
-- **`runway`**: Lead-in distance in meters (defaults to 16.0m) along the approach vector for player spawn and orientation.
-- **`locator`**: Target district locator name to use for the map pin.
-- **`scores`**: Target `own` and `kill` point thresholds (see [OTS Design Guide](OTS_DESIGN_GUIDE.md#8-score-theory--target-balancing) for score balancing benchmarks).
+- **`runway`** *(Optional)*: Lead-in approach distance in meters (defaults to 16.0m) along the runway vector for skater spawn and orientation.
+- **`scores`** *(Optional)*: Target `own` and `kill` point thresholds (defaults to 600 / 1000). See [OTS Design Guide](OTS_DESIGN_GUIDE.md#8-score-theory--target-balancing).
+- **`cam`** *(Optional)*: Custom camera coordinates `[X, Y, Z]`. If omitted, the compositor automatically calculates a clean dynamic framing angle from `site`.
+- **`locator`** *(Optional)*: Custom RenderWare locator pin. If omitted, the compositor automatically binds an available cut/spare locator from the district.
 
-For complete spot geometry design, arrow unification, runway physics, camera flythroughs, and chevron suppression techniques, see the [Master OTS Design Guide](OTS_DESIGN_GUIDE.md).
+> [!NOTE]
+> **Persistent Spot Registry (`mods/.spot_registry.json`)**:
+> Low-level binary engine IDs (`ots_dwmc_03`, `num: 3`, GUIDs, and locators) are automatically managed and permanently pinned in `mods/.spot_registry.json`. Pack authors never need to worry about 11-byte ASCII limits, number collisions, or coordinating ID assignments with other modders. Player save files and high scores remain permanently locked to your spot across installing, removing, or re-ordering mods.
 
 ---
 

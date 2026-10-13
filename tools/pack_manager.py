@@ -219,14 +219,11 @@ def cmd_scaffold(args):
         "enabled": True,
         "spots": [
             {
-                "id": defaults['id'],
-                "num": defaults['num'],
+                "key": f"{pack_id}_spot_01",
                 "title": defaults['title'],
                 "desc": "Lay down your best lines here to own this spot.",
                 "district": district,
                 "site": defaults['site'],
-                "cam": defaults['cam'],
-                "locator": defaults['locator'],
                 "runway": 16.0,
                 "scores": {
                     "own": 600,
