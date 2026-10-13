@@ -29,6 +29,15 @@ def cmd_list(args):
         print(f"No custom challenge packs found in {packs_dir}")
         return 0
 
+    reg_file = (packs_dir.parent if (packs_dir.parent / 'raw').exists() else Path(args.out_dir).parent) / '.spot_registry.json'
+    registry = {}
+    if reg_file.exists():
+        try:
+            with open(reg_file, 'r', encoding='utf-8') as f:
+                registry = json.load(f).get('spots', {})
+        except Exception:
+            pass
+
     print("=" * 80)
     print(f"{'STATUS':<10} {'ID':<20} {'NAME':<24} {'VERSION':<8} {'CHALLENGES'}")
     print("=" * 80)
@@ -36,8 +45,10 @@ def cmd_list(args):
         status = "[ENABLED]" if p['enabled'] else "[DISABLED]"
         spots_str = f"{len(p['spots'])} spots"
         print(f"{status:<10} {p['id']:<20} {p['name'][:23]:<24} {p['version']:<8} {spots_str}")
-        for s in p['spots']:
-            spot_id = s.get('id', 'ots_univ_%02d' % s.get('num', 0))
+        for idx, s in enumerate(p['spots']):
+            base_k = str(s.get('key') or s.get('id') or s.get('title') or f"spot_{idx}")
+            reg_entry = registry.get(f"{p['id']}:{base_k}")
+            spot_id = s.get('id') or (reg_entry.get('id') if reg_entry else None) or '(auto)'
             title = s.get('title', 'Unknown')
             district = s.get('district', 'dist_university')
             print(f"    - {spot_id:<12} '{title}' ({district})")
@@ -146,7 +157,7 @@ def cmd_disable(args):
 
 
 def cmd_sync(args):
-    return compose(Path(args.packs_dir), Path(args.out_dir), force=args.force)
+    return compose(Path(args.packs_dir), Path(args.out_dir), force=args.force, reset_registry=getattr(args, 'reset_registry', False))
 
 
 def cmd_restore_stock(args):
@@ -252,6 +263,7 @@ def main():
     # sync
     p_sync = subs.add_parser('sync', help='Synchronize compiled mods with enabled packs')
     p_sync.add_argument('--force', action='store_true', help='Force recomposition')
+    p_sync.add_argument('--reset-registry', action='store_true', help='Reset persistent spot registry to reclaim IDs')
 
     # restore-stock
     p_stock = subs.add_parser('restore-stock', help='Restore mods to 100%% clean stock retail disc')

@@ -1506,7 +1506,7 @@ def restore_stock_retail(out_dir):
     print("Cleaned mods/compiled: 0 custom packs active. Game runs pure stock retail data.")
 
 
-def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, game_dir=None, user_data_dir=None):
+def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, game_dir=None, user_data_dir=None, reset_registry=False):
     global STOCK_DATA, GAME_DIR, USER_DATA_DIR
     packs_dir = Path(packs_dir)
     out_dir = Path(out_dir)
@@ -1539,13 +1539,49 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
         'play': 2,
     }
 
-    # Pass 1: Collect spots, assign defaults for missing optional fields
+    # Locate and load persistent spot registry to ensure IDs never drift across pack add/remove/swap
+    if (packs_dir.parent / 'raw').exists() or (packs_dir.parent / 'compiled').exists():
+        registry_file = packs_dir.parent / '.spot_registry.json'
+    else:
+        registry_file = out_dir.parent / '.spot_registry.json'
+
+    if reset_registry and registry_file.exists():
+        try:
+            registry_file.unlink()
+            print(f"Reset persistent spot registry: {registry_file}")
+        except Exception:
+            pass
+
+    spot_registry = {'version': 1, 'spots': {}}
+    if not reset_registry and registry_file.exists():
+        try:
+            with open(registry_file, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict) and 'spots' in loaded:
+                    spot_registry = loaded
+        except Exception as e:
+            print(f"Warning: Failed to load spot registry from {registry_file}: {e}", file=sys.stderr)
+
+    registered_spots = spot_registry.setdefault('spots', {})
+
+    # Pass 1: Collect spots, assign defaults for missing optional fields, and build unique registry keys
     for p in enabled_packs:
-        for s in p['spots']:
+        seen_keys_in_pack = set()
+        for idx, s in enumerate(p['spots']):
             s['pack_id'] = p['id']
             dist = get_spot_district(s)
             s['district'] = dist
             target = get_spot_target(s)
+
+            # Unique key within this pack, preferring explicit key/id/title
+            base_k = str(s.get('key') or s.get('id') or s.get('title') or f"spot_{idx}")
+            k = base_k
+            suffix = 1
+            while k in seen_keys_in_pack:
+                suffix += 1
+                k = f"{base_k}_{suffix}"
+            seen_keys_in_pack.add(k)
+            s['_reg_key'] = f"{p['id']}:{k}"
 
             # Default optional fields
             s.setdefault('runway', 16.0)
@@ -1560,14 +1596,19 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
             all_spots.append(s)
             spots_by_target[target].append(s)
 
-    # Pass 2: Auto-assign num and id per target container to prevent any collision
+    # Pass 2: Assign num and id per target container with persistent registry stability
     for target, t_spots in spots_by_target.items():
         used_nums = set()
         used_ids = set()
         start_num = CONTAINER_START_NUMS.get(target, 2)
-        next_num = start_num
 
-        # First pass: preserve valid, non-conflicting explicit numbers and IDs
+        # Gather all known numbers/IDs already allocated in registry for this container
+        target_regs = {k: v for k, v in registered_spots.items() if v.get('target') == target}
+        all_registered_nums = {v['num'] for v in target_regs.values() if isinstance(v.get('num'), int)}
+        all_registered_ids = {v['id'] for v in target_regs.values() if isinstance(v.get('id'), str)}
+        max_registered_num = max(all_registered_nums, default=start_num - 1)
+
+        # 2a: Preserve valid, non-conflicting explicit numbers and IDs from pack.json
         for s in t_spots:
             dist = s['district']
             dist_cfg = BASE_DISTRICT_CONFIGS.get(dist, BASE_DISTRICT_CONFIGS['dist_university'])
@@ -1586,11 +1627,30 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
                     used_ids.add(candidate_id)
                     continue
 
-            # Clear conflicting or missing identifiers for auto-assignment
+            # Clear missing or conflicting identifiers for registry / auto-assignment
             s['num'] = None
             s['id'] = None
 
-        # Second pass: auto-assign sequential numbers and IDs
+        # 2b: Restore known numbers and IDs from persistent registry
+        for s in t_spots:
+            if s.get('num') is not None and s.get('id') is not None:
+                continue
+
+            reg = target_regs.get(s['_reg_key'])
+            if reg:
+                reg_num = reg.get('num')
+                reg_id = reg.get('id')
+                if isinstance(reg_num, int) and reg_num not in used_nums:
+                    if isinstance(reg_id, str) and reg_id not in used_ids:
+                        s['num'] = reg_num
+                        s['id'] = reg_id
+                        if reg.get('locator') and not s.get('locator'):
+                            s['locator'] = reg['locator']
+                        used_nums.add(reg_num)
+                        used_ids.add(reg_id)
+
+        # 2c: Auto-assign brand new spots sequentially, strictly above any existing registered num
+        next_num = max(start_num, max_registered_num + 1)
         for s in t_spots:
             if s.get('num') is not None and s.get('id') is not None:
                 continue
@@ -1600,11 +1660,11 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
             tpl = dist_cfg['template'] if target == 'base' else DLC_CONFIGS[target]['template']
             tpl_prefix = tpl[:-2]
 
-            while next_num in used_nums:
+            while next_num in used_nums or next_num in all_registered_nums:
                 next_num += 1
 
             candidate_id = f"{tpl_prefix}%02d" % next_num
-            while candidate_id in used_ids:
+            while candidate_id in used_ids or candidate_id in all_registered_ids:
                 next_num += 1
                 candidate_id = f"{tpl_prefix}%02d" % next_num
 
@@ -1612,10 +1672,29 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
             s['id'] = candidate_id
             used_nums.add(next_num)
             used_ids.add(candidate_id)
+            all_registered_nums.add(next_num)
+            all_registered_ids.add(candidate_id)
             next_num += 1
 
+        # 2d: Update registry mapping for active spots in this container
         for s in t_spots:
+            registered_spots[s['_reg_key']] = {
+                'pack_id': s['pack_id'],
+                'target': target,
+                'district': s['district'],
+                'num': s['num'],
+                'id': s['id'],
+                'locator': s.get('locator')
+            }
             pack_dirs_by_spot[s['id']] = next(p['path'] for p in enabled_packs if p['id'] == s['pack_id'])
+
+    # Pass 3: Pre-resolve base locators so locator is immediately recorded and stable
+    base_spots = spots_by_target.get('base', [])
+    if base_spots and STOCK_DATA:
+        resolve_base_locators(base_spots)
+        for s in base_spots:
+            if s.get('locator') and s['_reg_key'] in registered_spots:
+                registered_spots[s['_reg_key']]['locator'] = s['locator']
 
     # 3. Compute per-target composite hashes
     current_target_hashes = {}
@@ -1682,6 +1761,11 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
 
     # If nothing is dirty and sentinel exists, we are done in < 5ms!
     if not dirty_targets and (out_dir / '.active').exists():
+        try:
+            with open(registry_file, 'w', encoding='utf-8') as f:
+                json.dump(spot_registry, f, indent=2)
+        except Exception:
+            pass
         print(f"All {len(enabled_packs)} mod(s) are up to date in {out_dir.name}.")
         return 0
 
@@ -1726,7 +1810,20 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
         build_loc(misc, all_spots)
         bigfile.write_delta(misc, out_dir / 'miscboot_custom.mod', stock_misc)
 
-    # 8. Mark active state and save composite hashes
+    # 8. Update resolved locators in the registry and save
+    for s in all_spots:
+        reg_entry = registered_spots.get(s['_reg_key'])
+        if reg_entry and s.get('locator'):
+            reg_entry['locator'] = s['locator']
+
+    try:
+        registry_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(registry_file, 'w', encoding='utf-8') as f:
+            json.dump(spot_registry, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Failed to save spot registry to {registry_file}: {e}", file=sys.stderr)
+
+    # 9. Mark active state and save composite hashes
     (out_dir / '.active').touch()
     new_state = {
         'version': 2,
@@ -1749,8 +1846,9 @@ def main():
     ap.add_argument('--game-dir', default=None, help="Game data directory containing data/big/db.big")
     ap.add_argument('--user-data-dir', default=None, help="User data directory containing installed DLC")
     ap.add_argument('--force', action='store_true', help="Force recomposition even if state hashes match")
+    ap.add_argument('--reset-registry', action='store_true', help="Reset persistent spot registry to reclaim IDs")
     a = ap.parse_args()
-    return compose(Path(a.packs_dir), Path(a.out_dir), a.force, game_dir=a.game_dir, user_data_dir=a.user_data_dir)
+    return compose(Path(a.packs_dir), Path(a.out_dir), a.force, game_dir=a.game_dir, user_data_dir=a.user_data_dir, reset_registry=a.reset_registry)
 
 
 if __name__ == '__main__':
