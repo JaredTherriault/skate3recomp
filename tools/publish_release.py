@@ -159,6 +159,21 @@ def main():
     package_clean_zip(win_zip, 'Skate3Recomp-Windows', win_files)
 
     # Step 5: Package Separate Mods Archive (Skate3Recomp-Mods.zip)
+    py_dir = REPO_ROOT / 'tools' / 'python'
+    if not (py_dir / 'python.exe').exists():
+        print("Fetching portable Windows Python runtime for mods package...")
+        py_dir.mkdir(parents=True, exist_ok=True)
+        import urllib.request
+        zip_tmp = REPO_ROOT / 'tools' / 'python-embed.zip'
+        urllib.request.urlretrieve(
+            'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip',
+            zip_tmp
+        )
+        with zipfile.ZipFile(zip_tmp, 'r') as zf:
+            zf.extractall(py_dir)
+        if zip_tmp.exists():
+            zip_tmp.unlink()
+
     mods_zip = DIST_DIR / 'Skate3Recomp-Mods.zip'
     mod_files = []
     for folder in ['mods', 'tools']:

@@ -46,4 +46,4 @@ __pycache__/
 
 /mods/compiled/*
 !/mods/compiled/.gitkeep
-
+tools/python/

@@ -1441,19 +1441,18 @@ struct ModOverlayData {
 };
 
 std::shared_ptr<ModOverlayData> LoadModOverlay(const std::filesystem::path& mod_path) {
-  FILE* file = rex::filesystem::OpenFile(mod_path, "rb");
+  std::ifstream file(mod_path, std::ios::binary);
   if (!file) {
     REXLOG_ERROR("Skate 3 mods: cannot open {}", mod_path.string());
     return nullptr;
   }
   ModFileHeader hdr{};
-  if (fread(&hdr, 1, sizeof(hdr), file) != sizeof(hdr)) {
-    fclose(file);
+  file.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+  if (file.gcount() != sizeof(hdr)) {
     REXLOG_ERROR("Skate 3 mods: header read failed {}", mod_path.string());
     return nullptr;
   }
   if (hdr.magic != 0x5333444C) {  // 'S3DL'
-    fclose(file);
     REXLOG_ERROR("Skate 3 mods: bad magic {:08X} in {}", hdr.magic, mod_path.string());
     return nullptr;
   }
@@ -1466,8 +1465,8 @@ std::shared_ptr<ModOverlayData> LoadModOverlay(const std::filesystem::path& mod_
 
   for (uint32_t i = 0; i < hdr.chunk_count; ++i) {
     ModChunkHeader chdr{};
-    if (fread(&chdr, 1, sizeof(chdr), file) != sizeof(chdr)) {
-      fclose(file);
+    file.read(reinterpret_cast<char*>(&chdr), sizeof(chdr));
+    if (file.gcount() != sizeof(chdr)) {
       REXLOG_ERROR("Skate 3 mods: chunk {} header read failed in {}", i, mod_path.string());
       return nullptr;
     }
@@ -1476,15 +1475,14 @@ std::shared_ptr<ModOverlayData> LoadModOverlay(const std::filesystem::path& mod_
     chunk.length = chdr.length;
     chunk.data.resize(chdr.length);
     if (chdr.length > 0) {
-      if (fread(chunk.data.data(), 1, chdr.length, file) != chdr.length) {
-        fclose(file);
+      file.read(reinterpret_cast<char*>(chunk.data.data()), chdr.length);
+      if (static_cast<uint32_t>(file.gcount()) != chdr.length) {
         REXLOG_ERROR("Skate 3 mods: chunk {} payload read failed in {}", i, mod_path.string());
         return nullptr;
       }
     }
     data->chunks.push_back(std::move(chunk));
   }
-  fclose(file);
   return data;
 }
 
@@ -1656,6 +1654,8 @@ void Skate3BaseApp::InstallModOverrides() {
     const std::vector<std::filesystem::path> search_paths = {
         app_root / "mods" / "compiled",
         app_root.parent_path() / "mods" / "compiled",
+        runtime()->game_data_root() / "mods" / "compiled",
+        runtime()->game_data_root().parent_path() / "mods" / "compiled",
         app_root / "custom_bigs",
         app_root.parent_path() / "custom_bigs",
         app_root.parent_path() / "build" / "custom_bigs",
@@ -1678,6 +1678,8 @@ void Skate3BaseApp::InstallModOverrides() {
   const std::vector<std::filesystem::path> candidate_pack_dirs = {
       app_root / "mods" / "raw",
       app_root.parent_path() / "mods" / "raw",
+      runtime()->game_data_root() / "mods" / "raw",
+      runtime()->game_data_root().parent_path() / "mods" / "raw",
       app_root / "custom_packs",
       app_root.parent_path() / "custom_packs",
       app_root.parent_path() / "build" / "custom_packs",
@@ -1697,6 +1699,12 @@ void Skate3BaseApp::InstallModOverrides() {
   std::filesystem::path compositor_script = app_root.parent_path() / "tools" / "pack_compositor.py";
   if (!std::filesystem::exists(compositor_script)) {
     compositor_script = app_root / "tools" / "pack_compositor.py";
+  }
+  if (!std::filesystem::exists(compositor_script)) {
+    compositor_script = runtime()->game_data_root() / "tools" / "pack_compositor.py";
+  }
+  if (!std::filesystem::exists(compositor_script)) {
+    compositor_script = runtime()->game_data_root().parent_path() / "tools" / "pack_compositor.py";
   }
 
   const bool has_packs_dir = std::filesystem::is_directory(packs_dir);
@@ -1737,6 +1745,8 @@ void Skate3BaseApp::InstallModOverrides() {
       const std::vector<std::filesystem::path> local_pythons = {
           app_root / "tools" / "python" / "python.exe",
           app_root.parent_path() / "tools" / "python" / "python.exe",
+          runtime()->game_data_root() / "tools" / "python" / "python.exe",
+          runtime()->game_data_root().parent_path() / "tools" / "python" / "python.exe",
           app_root / "mods" / ".python" / "python.exe",
       };
       for (const auto& lp : local_pythons) {
