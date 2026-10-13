@@ -46,4 +46,6 @@ __pycache__/
 
 /mods/compiled/*
 !/mods/compiled/.gitkeep
+/mods/.spot_registry.json
+*.spot_registry.json
 tools/python/

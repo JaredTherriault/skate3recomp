@@ -1534,9 +1534,9 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
 
     CONTAINER_START_NUMS = {
         'base': 16,
-        'dannyway': 2,
-        'maloof': 2,
-        'play': 2,
+        'dannyway': 3,
+        'maloof': 3,
+        'play': 5,
     }
 
     # Locate and load persistent spot registry to ensure IDs never drift across pack add/remove/swap

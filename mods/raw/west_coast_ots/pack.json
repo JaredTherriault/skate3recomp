@@ -1,125 +1,115 @@
 {
+  "id": "west_coast_ots",
+  "name": "West Coast OTS",
+  "version": "1.0.0",
   "author": "Skate 3 Recomp Community",
   "description": "5 custom Own-The-Spot challenges across University District: Snoop, Dre, Eazy-E, Cube, and Warren.",
   "enabled": true,
-  "id": "west_coast_ots",
-  "name": "West Coast OTS",
   "spots": [
     {
-      "cam": [
-        406.95,
-        74.66,
-        -262.99
-      ],
+      "key": "snoop",
+      "title": "Snoop",
+      "district": "university",
       "desc": "Lay down your best lines here to own this spot.",
-      "district": "dist_university",
-      "id": "ots_univ_16",
-      "locator": "ots_univ_10_challengelocator_01",
-      "num": 16,
-      "runway": 16.0,
-      "scores": {
-        "kill": 1000,
-        "own": 600
-      },
       "site": [
         407.62,
         73.31,
         -260.33
       ],
-      "title": "Snoop"
-    },
-    {
       "cam": [
-        428.95,
-        70.71,
-        -251.53
+        406.95,
+        74.66,
+        -262.99
       ],
-      "desc": "Lay down your best lines here to own this spot.",
-      "district": "dist_university",
-      "id": "ots_univ_17",
-      "locator": "ots_univ_11_challengelocator_01",
-      "num": 17,
       "runway": 16.0,
       "scores": {
-        "kill": 1000,
-        "own": 600
-      },
+        "own": 600,
+        "kill": 1000
+      }
+    },
+    {
+      "key": "dre",
+      "title": "Dre",
+      "district": "university",
+      "desc": "Lay down your best lines here to own this spot.",
       "site": [
         430.65,
         69.37,
         -249.4
       ],
-      "title": "Dre"
-    },
-    {
       "cam": [
-        386.94,
-        70.72,
-        -249.57
+        428.95,
+        70.71,
+        -251.53
       ],
-      "desc": "Lay down your best lines here to own this spot.",
-      "district": "dist_university",
-      "id": "ots_univ_18",
-      "locator": "ots_univ_12_challengelocator_01",
-      "num": 18,
       "runway": 16.0,
       "scores": {
-        "kill": 1000,
-        "own": 600
-      },
+        "own": 600,
+        "kill": 1000
+      }
+    },
+    {
+      "key": "eazy_e",
+      "title": "Eazy-E",
+      "district": "university",
+      "desc": "Lay down your best lines here to own this spot.",
       "site": [
         384.23,
         69.37,
         -249.1
       ],
-      "title": "Eazy-E"
-    },
-    {
       "cam": [
-        385.45,
+        386.94,
         70.72,
-        -279.6
+        -249.57
       ],
-      "desc": "Lay down your best lines here to own this spot.",
-      "district": "dist_university",
-      "id": "ots_univ_19",
-      "locator": "ots_univ_13_challengelocator_01",
-      "num": 19,
       "runway": 16.0,
       "scores": {
-        "kill": 1000,
-        "own": 600
-      },
+        "own": 600,
+        "kill": 1000
+      }
+    },
+    {
+      "key": "cube",
+      "title": "Cube",
+      "district": "university",
+      "desc": "Lay down your best lines here to own this spot.",
       "site": [
         384.07,
         69.37,
         -281.96
       ],
-      "title": "Cube"
-    },
-    {
       "cam": [
-        427.48,
-        70.71,
-        -284.69
+        385.45,
+        70.72,
+        -279.6
       ],
-      "desc": "Lay down your best lines here to own this spot.",
-      "district": "dist_university",
-      "id": "ots_univ_20",
-      "locator": "ots_univ_14_challengelocator_01",
-      "num": 20,
       "runway": 16.0,
       "scores": {
-        "kill": 1000,
-        "own": 600
-      },
+        "own": 600,
+        "kill": 1000
+      }
+    },
+    {
+      "key": "warren",
+      "title": "Warren",
+      "district": "university",
+      "desc": "Lay down your best lines here to own this spot.",
       "site": [
         429.94,
         69.36,
         -283.49
       ],
-      "title": "Warren"
+      "cam": [
+        427.48,
+        70.71,
+        -284.69
+      ],
+      "runway": 16.0,
+      "scores": {
+        "own": 600,
+        "kill": 1000
+      }
     }
-  ],
-  "version": "1.0.0"
+  ]
 }

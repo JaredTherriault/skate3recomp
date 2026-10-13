@@ -7,22 +7,15 @@
   "enabled": true,
   "spots": [
     {
-      "id": "ots_mmcn_03",
-      "num": 3,
+      "key": "nine_to_five",
       "title": "Nine to Five",
+      "district": "maloof",
       "desc": "Clock in down the 9-stair hubba and rail to cash your paycheck in Queens.",
-      "district": "dist_maloof",
       "site": [
         -0.25,
         5.43,
         20.31
       ],
-      "cam": [
-        -0.25,
-        6.5,
-        25.0
-      ],
-      "locator": "street_mmcn_01_challengelocator_01",
       "start": [
         -0.25,
         4.33,

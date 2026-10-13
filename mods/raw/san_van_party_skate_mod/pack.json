@@ -7,22 +7,15 @@
   "enabled": true,
   "spots": [
     {
-      "id": "ots_artg_05",
-      "num": 5,
+      "key": "regs_to_riches",
       "title": "Regs to Riches",
+      "district": "artgallery",
       "desc": "Turn this courtyard funbox into high art to own the gallery.",
-      "district": "dist_artgallery",
       "site": [
         129.15,
         43.89,
         -34.80
       ],
-      "cam": [
-        125.0,
-        45.0,
-        -38.0
-      ],
-      "locator": "skate_artg_01_challengelocator_01",
       "start": [
         122.22,
         42.82,

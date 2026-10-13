@@ -7,22 +7,15 @@
   "enabled": true,
   "spots": [
     {
-      "id": "ots_dwmc_03",
-      "num": 3,
+      "key": "bridge_over_tranquil_water",
       "title": "Bridge Over Tranquil Water",
+      "district": "dannyway",
       "desc": "Keep your balance and stay dry over the river canal to own this slice of paradise.",
-      "district": "dist_dannyway",
       "site": [
         173.63,
         -20.43,
         2.57
       ],
-      "cam": [
-        165.00,
-        -18.50,
-        2.57
-      ],
-      "locator": "film_dwmc_01_challengelocator_01",
       "start": [
         157.00,
         -20.15,
