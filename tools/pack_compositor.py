@@ -212,7 +212,7 @@ DLC_CONFIGS = {
         'stock_big': 'dway_park_00000000.big',
         'custom_big': 'dway_park_custom.big',
         'folder_id': 'E8CB22B7FEA270B0D0188C31BDFE69A71F0B94D145',
-        'districts': {'dist_dannyway', 'dist_dwmc', 'dist_dwgh'},
+        'districts': {'dist_dannyway', 'dist_dwmc', 'dist_dwgh', 'dannyway', 'danny_way', 'hawaii'},
         'template': 'ots_dwmc_01',
         'orig_site': (137.307571, -17.272011, -23.229794),
         'start_offs': (0x1300, 0x1620),
@@ -241,7 +241,7 @@ DLC_CONFIGS = {
         'stock_big': 'maloof_money_cup_00000000.big',
         'custom_big': 'maloof_custom.big',
         'folder_id': '0165E5B906309F63ACA64BC2DF01667B9930C47D45',
-        'districts': {'dist_maloof', 'dist_mmcn'},
+        'districts': {'dist_maloof', 'dist_mmcn', 'maloof', 'maloof_nyc', 'nyc'},
         'template': 'ots_mmcn_01',
         'orig_site': (-53.903229, 3.563075, -21.946873),
         'start_offs': (0x1020, 0x11a0),
@@ -263,7 +263,7 @@ DLC_CONFIGS = {
         'stock_big': 'play_00000000.big',
         'custom_big': 'play_custom.big',
         'folder_id': '8576AE236D00CF0FD8836A72A2CC5B4E3FAC12D445',
-        'districts': {'dist_artgallery', 'dist_zen', 'dist_play'},
+        'districts': {'dist_artgallery', 'dist_zen', 'dist_play', 'play', 'party', 'san_van_party', 'artgallery'},
         'template': 'ots_artg_01',
         'orig_site': (74.213365, 45.980183, 63.870182),
         'start_offs': (0x10b0, 0x1230),
@@ -329,7 +329,7 @@ def get_spot_district(spot):
             return dist_id
     for dlc_id, cfg in DLC_CONFIGS.items():
         if raw in cfg['districts'] or raw == dlc_id:
-            return raw
+            return dlc_id
     return 'dist_university'
 
 
