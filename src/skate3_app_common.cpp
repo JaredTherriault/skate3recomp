@@ -977,14 +977,16 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   auto load_mods = [this]() -> std::vector<rex::ui::SimpleModInfo> {
     std::vector<rex::ui::SimpleModInfo> result;
     const auto app_root = rex::filesystem::GetAppRootFolder();
-    const std::vector<std::filesystem::path> candidate_pack_dirs = {
-        app_root / "mods" / "raw",
-        app_root.parent_path() / "mods" / "raw",
-        app_root / "custom_packs",
-        app_root.parent_path() / "custom_packs",
-        app_root.parent_path() / "build" / "custom_packs",
-        app_root / "build" / "custom_packs",
-    };
+    std::vector<std::filesystem::path> candidate_pack_dirs;
+    if (app_root.filename() == "build" || app_root.filename() == "build-win") {
+      candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+    }
+    candidate_pack_dirs.push_back(app_root / "mods" / "raw");
+    candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+    candidate_pack_dirs.push_back(app_root / "custom_packs");
+    candidate_pack_dirs.push_back(app_root.parent_path() / "custom_packs");
+    candidate_pack_dirs.push_back(app_root.parent_path() / "build" / "custom_packs");
+    candidate_pack_dirs.push_back(app_root / "build" / "custom_packs");
     std::filesystem::path packs_dir;
     for (const auto& cpd : candidate_pack_dirs) {
       if (std::filesystem::is_directory(cpd)) {
@@ -1028,14 +1030,16 @@ void Skate3BaseApp::ToggleSimpleSettings() {
 
   auto save_mods = [this](const std::vector<rex::ui::SimpleModInfo>& mods) {
     const auto app_root = rex::filesystem::GetAppRootFolder();
-    const std::vector<std::filesystem::path> candidate_pack_dirs = {
-        app_root / "mods" / "raw",
-        app_root.parent_path() / "mods" / "raw",
-        app_root / "custom_packs",
-        app_root.parent_path() / "custom_packs",
-        app_root.parent_path() / "build" / "custom_packs",
-        app_root / "build" / "custom_packs",
-    };
+    std::vector<std::filesystem::path> candidate_pack_dirs;
+    if (app_root.filename() == "build" || app_root.filename() == "build-win") {
+      candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+    }
+    candidate_pack_dirs.push_back(app_root / "mods" / "raw");
+    candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+    candidate_pack_dirs.push_back(app_root / "custom_packs");
+    candidate_pack_dirs.push_back(app_root.parent_path() / "custom_packs");
+    candidate_pack_dirs.push_back(app_root.parent_path() / "build" / "custom_packs");
+    candidate_pack_dirs.push_back(app_root / "build" / "custom_packs");
     std::filesystem::path packs_dir;
     for (const auto& cpd : candidate_pack_dirs) {
       if (std::filesystem::is_directory(cpd)) {
@@ -1124,8 +1128,12 @@ void Skate3BaseApp::ToggleChallengeEditor() {
       }
       return false;
     };
+    auto restart_game = [this]() {
+      RestartGame();
+    };
     challenge_editor_dialog_ =
-        std::make_unique<skate3::ChallengeEditorDialog>(imgui_drawer(), std::move(poll_gamepad));
+        std::make_unique<skate3::ChallengeEditorDialog>(imgui_drawer(), std::move(poll_gamepad),
+                                                        std::move(restart_game));
   }
 
   if (challenge_editor_dialog_->visible()) {
@@ -1713,16 +1721,18 @@ void Skate3BaseApp::InstallModOverrides() {
   std::filesystem::create_directories(custom_dir, dir_ec);
 
   // Raw Mod Packages
-  const std::vector<std::filesystem::path> candidate_pack_dirs = {
-      app_root / "mods" / "raw",
-      app_root.parent_path() / "mods" / "raw",
-      runtime()->game_data_root() / "mods" / "raw",
-      runtime()->game_data_root().parent_path() / "mods" / "raw",
-      app_root / "custom_packs",
-      app_root.parent_path() / "custom_packs",
-      app_root.parent_path() / "build" / "custom_packs",
-      app_root / "build" / "custom_packs",
-  };
+  std::vector<std::filesystem::path> candidate_pack_dirs;
+  if (app_root.filename() == "build" || app_root.filename() == "build-win") {
+    candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+  }
+  candidate_pack_dirs.push_back(app_root / "mods" / "raw");
+  candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+  candidate_pack_dirs.push_back(runtime()->game_data_root() / "mods" / "raw");
+  candidate_pack_dirs.push_back(runtime()->game_data_root().parent_path() / "mods" / "raw");
+  candidate_pack_dirs.push_back(app_root / "custom_packs");
+  candidate_pack_dirs.push_back(app_root.parent_path() / "custom_packs");
+  candidate_pack_dirs.push_back(app_root.parent_path() / "build" / "custom_packs");
+  candidate_pack_dirs.push_back(app_root / "build" / "custom_packs");
   std::filesystem::path packs_dir;
   for (const auto& cpd : candidate_pack_dirs) {
     if (std::filesystem::is_directory(cpd)) {

@@ -110,6 +110,32 @@
         "own": 600,
         "kill": 1000
       }
+    },
+    {
+      "key": "plaza-rail-exit",
+      "title": "Plaza Rail Exit",
+      "district": "university",
+      "desc": "Lay down your best lines here to own this spot.",
+      "site": [
+        415.41,
+        67.55,
+        -197.07
+      ],
+      "start": [
+        418.82,
+        67.55,
+        -222.54
+      ],
+      "cam": [
+        412.91,
+        69.05,
+        -199.57
+      ],
+      "runway": 25.7,
+      "scores": {
+        "own": 600,
+        "kill": 1000
+      }
     }
   ]
 }

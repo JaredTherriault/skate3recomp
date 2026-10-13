@@ -182,7 +182,7 @@ def main():
             for p in fdir.rglob('*'):
                 if not p.is_file():
                     continue
-                if p.name in ('publish_release.py', '.DS_Store') or p.name.endswith(('.pyc', '.pyo')) or '__pycache__' in p.parts:
+                if p.name in ('publish_release.py', '.DS_Store', 'composer.log') or p.name.endswith(('.pyc', '.pyo')) or '__pycache__' in p.parts:
                     continue
                 rel = p.relative_to(REPO_ROOT)
                 mod_files.append((p, str(rel)))

@@ -1687,4 +1687,18 @@ void CaptureOtsCandidate() {
   }
 }
 
+bool GetLastSkaterPosition(float out_pos[3]) {
+  if (!out_pos) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_mu);
+  if (g_last_pos_ns == 0) {
+    return false;
+  }
+  out_pos[0] = g_last_pos[0];
+  out_pos[1] = g_last_pos[1];
+  out_pos[2] = g_last_pos[2];
+  return true;
+}
+
 }  // namespace skate3::coord_dump

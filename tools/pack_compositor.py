@@ -536,14 +536,36 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
     (ux, uz), (px, pz), start_pos = compute_approach_and_start(spot)
     skater_rot = forward_matrix(ux, uz)
 
-    wait_pts = {
-        'wait_1': (round(sx + 3.0 * ux + 5.5 * px, 2), round(sy + 2.4, 2), round(sz + 3.0 * uz + 5.5 * pz, 2)),
-        'wait_2': (round(sx + 0.5 * ux + 4.5 * px, 2), round(sy + 1.4, 2), round(sz + 0.5 * uz + 4.5 * pz, 2)),
-        'wait_3': (round(sx - 3.5 * ux + 3.5 * px, 2), round(sy + 1.8, 2), round(sz - 3.5 * uz + 3.5 * pz, 2)),
-        'wait_4': (round(sx - 7.5 * ux + 2.0 * px, 2), round(sy + 2.0, 2), round(sz - 7.5 * uz + 2.0 * pz, 2)),
-        'wait_5': (round(sx - 12.0 * ux + 0.5 * px, 2), round(sy + 1.8, 2), round(sz - 12.0 * uz + 0.5 * pz, 2)),
-        'wait_6': start_pos,
-    }
+    sx, sy, sz = spot['site']
+
+    # Compute rotating orbit around obstacle for flythrough cutscene
+    if 'cam' in spot and len(spot['cam']) >= 3:
+        cx, cy, cz = spot['cam'][:3]
+        cdx, cdz = cx - sx, cz - sz
+        orbit_r = math.hypot(cdx, cdz)
+        if orbit_r < 2.0 or orbit_r > 25.0:
+            orbit_r = 5.5
+        theta_0 = math.atan2(cdz, cdx)
+        base_h = cy
+    else:
+        orbit_r = 5.5
+        theta_0 = math.atan2(uz, ux) + math.pi * 0.5
+        base_h = sy + 1.8
+
+    wait_pts = {}
+    wait_rots = {}
+    for idx, step in enumerate([0.0, 0.45, 0.9, 1.35, 1.8]):
+        th = theta_0 + step
+        wx = round(sx + orbit_r * math.cos(th), 2)
+        wz = round(sz + orbit_r * math.sin(th), 2)
+        wy = round(base_h + 0.25 * math.sin(idx * 0.8), 2)
+        wn = f'wait_{idx + 1}'
+        wait_pts[wn] = (wx, wy, wz)
+        look_x, look_z = sx - wx, sz - wz
+        wait_rots[wn] = forward_matrix(look_x, look_z)
+
+    wait_pts['wait_6'] = start_pos
+    wait_rots['wait_6'] = skater_rot
 
     def write_loc(base, pos_off, is_80, pos, rot):
         for r in range(3):
@@ -593,7 +615,8 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
             matched = False
             for wn, wpt in wait_pts.items():
                 if s.endswith('_' + wn):
-                    write_loc(base, pos_off, False, wpt, skater_rot)
+                    wrot = wait_rots.get(wn, skater_rot)
+                    write_loc(base, pos_off, False, wpt, wrot)
                     matched = True
                     break
             if not matched:

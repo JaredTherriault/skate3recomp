@@ -79,4 +79,7 @@ void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer);
 // F11 OTS candidate capture: one JSON line to <app root>/OTS_candidates.json.
 void CaptureOtsCandidate();
 
+// Returns the last known world position of the skater (true if available).
+bool GetLastSkaterPosition(float out_pos[3]);
+
 }  // namespace skate3::coord_dump

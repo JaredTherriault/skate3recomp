@@ -18,6 +18,9 @@
 #include <rex/logging.h>
 
 #include "../third_party/rexglue-sdk/thirdparty/tomlplusplus/vendor/json.hpp"
+#include <rex/kernel/guest_presence.h>
+#include <rex/kernel/xam/input_injection.h>
+#include "skate3_coord_dump.h"
 #include "skate3_native_scene.h"
 
 using json = nlohmann::json;
@@ -80,11 +83,8 @@ bool Project3D(const float pos[3], const float vp[16], const float proj[16],
   const float ndc_x = clip_x / clip_w;
   const float ndc_y = clip_y / clip_w;
 
-  // Projection X scale sign handles inverted horizontal axes
-  const float sign_x = (proj && proj[0] < 0.0f) ? -1.0f : 1.0f;
-
-  out_screen.x = (0.5f + 0.5f * sign_x * ndc_x) * disp_w;
-  out_screen.y = (0.5f - 0.5f * ndc_y) * disp_h;
+  out_screen.x = (ndc_x * 0.5f + 0.5f) * disp_w;
+  out_screen.y = (0.5f - ndc_y * 0.5f) * disp_h;
 
   if (out_depth) {
     *out_depth = clip_w;
@@ -155,8 +155,11 @@ void Draw3DBeacon(ImDrawList* dl, const float base_pos[3], float height, ImU32 c
 }  // namespace
 
 ChallengeEditorDialog::ChallengeEditorDialog(rex::ui::ImGuiDrawer* drawer,
-                                             GamepadPollFn gamepad_poll)
-    : ImGuiDialog(drawer), gamepad_poll_(std::move(gamepad_poll)) {
+                                             GamepadPollFn gamepad_poll,
+                                             RestartFn restart_fn)
+    : ImGuiDialog(drawer),
+      gamepad_poll_(std::move(gamepad_poll)),
+      restart_fn_(std::move(restart_fn)) {
   RefreshDiscoveredPacks();
   SetDrawActive(false);
 }
@@ -174,6 +177,11 @@ void ChallengeEditorDialog::Show() {
   visible_ = true;
   SetDrawActive(true);
   RefreshDiscoveredPacks();
+
+  // If in-game pause menu is active, dismiss it to keep viewport clear
+  if (rex::kernel::guest_presence::GameplayContextValue() == 0) {
+    rex::kernel::xam::QueueSyntheticInput(rex::input::X_INPUT_GAMEPAD_START, 6);
+  }
 
   // Remember if freecam was active, then activate it
   was_freecam_active_before_ = native_scene::IsFreecamActive();
@@ -220,11 +228,14 @@ void ChallengeEditorDialog::Toggle() {
 void ChallengeEditorDialog::RefreshDiscoveredPacks() {
   discovered_packs_.clear();
   const auto app_root = rex::filesystem::GetAppRootFolder();
-  const std::vector<std::filesystem::path> roots = {
-      app_root / "mods" / "raw",
-      app_root.parent_path() / "mods" / "raw",
-      std::filesystem::current_path() / "mods" / "raw",
-  };
+  std::vector<std::filesystem::path> roots;
+  if (app_root.filename() == "build" || app_root.filename() == "build-win") {
+    roots.push_back(app_root.parent_path() / "mods" / "raw");
+  }
+  roots.push_back(app_root / "mods" / "raw");
+  roots.push_back(app_root.parent_path() / "mods" / "raw");
+  roots.push_back(std::filesystem::current_path() / "mods" / "raw");
+  roots.push_back(std::filesystem::current_path().parent_path() / "mods" / "raw");
 
   for (const auto& root : roots) {
     if (!std::filesystem::exists(root) || !std::filesystem::is_directory(root)) {
@@ -292,20 +303,28 @@ void ChallengeEditorDialog::AutoDetectDistrict(const float drone_pos[3]) {
 
 void ChallengeEditorDialog::ComputeAimTarget(const float drone_pos[3], const float drone_fwd[3],
                                             float out_target[3]) {
-  // Default forward projection
-  float t = 10.0f;
-
-  // If drone points downward, project to approximate ground plane
-  if (drone_fwd[1] < -0.05f) {
-    // Ground plane estimate: 3.5m below current drone height or draft site height
-    const float ground_y = draft_.has_site ? draft_.site[1] : (drone_pos[1] - 3.5f);
-    t = (ground_y - drone_pos[1]) / drone_fwd[1];
-    t = std::clamp(t, 2.0f, 60.0f);
+  // Ground plane elevation: locked to skater's surface or draft site elevation
+  float ground_y = drone_pos[1] - 3.5f;
+  float skater_pos[3];
+  if (draft_.has_site) {
+    ground_y = draft_.site[1];
+  } else if (skate3::coord_dump::GetLastSkaterPosition(skater_pos)) {
+    ground_y = skater_pos[1];
   }
 
-  out_target[0] = drone_pos[0] + drone_fwd[0] * t;
-  out_target[1] = drone_pos[1] + drone_fwd[1] * t;
-  out_target[2] = drone_pos[2] + drone_fwd[2] * t;
+  // If drone points downward, project ray to intersect ground plane exactly
+  if (drone_fwd[1] < -0.05f) {
+    float t = (ground_y - drone_pos[1]) / drone_fwd[1];
+    t = std::clamp(t, 1.0f, 80.0f);
+    out_target[0] = drone_pos[0] + drone_fwd[0] * t;
+    out_target[1] = ground_y;
+    out_target[2] = drone_pos[2] + drone_fwd[2] * t;
+  } else {
+    constexpr float t = 10.0f;
+    out_target[0] = drone_pos[0] + drone_fwd[0] * t;
+    out_target[1] = ground_y;
+    out_target[2] = drone_pos[2] + drone_fwd[2] * t;
+  }
 }
 
 void ChallengeEditorDialog::ProcessInput(ImGuiIO& io, const float drone_pos[3],
@@ -565,7 +584,9 @@ void ChallengeEditorDialog::RenderUIWindow() {
         ImGui::SameLine();
         ImGui::Text("(%.1f, %.1f, %.1f)", draft_.cam[0], draft_.cam[1], draft_.cam[2]);
       } else {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "[NOT SET] Flythrough Cam");
+        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.35f, 1.0f), "[AUTO] Rotating Orbit Cam");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(Press RB to override)");
       }
 
       if (draft_.has_site && draft_.has_start) {
@@ -581,8 +602,12 @@ void ChallengeEditorDialog::RenderUIWindow() {
     ImGui::Separator();
 
     // Actions
-    if (ImGui::Button("Save Challenge to Pack", ImVec2(-1, 34))) {
-      SaveSpotToPack();
+    if (ImGui::Button("Save & Quick Restart to Test", ImVec2(-1, 36))) {
+      SaveSpotToPack(/*and_restart=*/true);
+    }
+
+    if (ImGui::Button("Save Challenge to Pack", ImVec2(-1, 30))) {
+      SaveSpotToPack(/*and_restart=*/false);
     }
 
     if (ImGui::Button("Close / Return to Skating (B)", ImVec2(-1, 28))) {
@@ -614,7 +639,7 @@ void ChallengeEditorDialog::RenderGamepadHUD() {
               IM_COL32(240, 240, 240, 240), legend);
 }
 
-bool ChallengeEditorDialog::SaveSpotToPack() {
+bool ChallengeEditorDialog::SaveSpotToPack(bool and_restart) {
   if (draft_.pack_id[0] == '\0') {
     status_message_ = "Error: Mod pack ID cannot be empty.";
     status_timer_ = 4.0f;
@@ -636,11 +661,34 @@ bool ChallengeEditorDialog::SaveSpotToPack() {
     return false;
   }
 
-  // Locate or create pack.json
+  // Locate existing pack.json or candidate target root
   const auto app_root = rex::filesystem::GetAppRootFolder();
-  std::filesystem::path pack_dir = app_root / "mods" / "raw" / draft_.pack_id;
-  if (!std::filesystem::exists(pack_dir)) {
-    pack_dir = std::filesystem::current_path() / "mods" / "raw" / draft_.pack_id;
+  std::vector<std::filesystem::path> candidate_roots;
+  if (app_root.filename() == "build" || app_root.filename() == "build-win") {
+    candidate_roots.push_back(app_root.parent_path() / "mods" / "raw");
+  }
+  candidate_roots.push_back(app_root / "mods" / "raw");
+  candidate_roots.push_back(app_root.parent_path() / "mods" / "raw");
+  candidate_roots.push_back(std::filesystem::current_path() / "mods" / "raw");
+  candidate_roots.push_back(std::filesystem::current_path().parent_path() / "mods" / "raw");
+
+  std::filesystem::path pack_dir;
+  for (const auto& r : candidate_roots) {
+    if (std::filesystem::exists(r / draft_.pack_id / "pack.json")) {
+      pack_dir = r / draft_.pack_id;
+      break;
+    }
+  }
+  if (pack_dir.empty()) {
+    for (const auto& r : candidate_roots) {
+      if (std::filesystem::is_directory(r)) {
+        pack_dir = r / draft_.pack_id;
+        break;
+      }
+    }
+  }
+  if (pack_dir.empty()) {
+    pack_dir = candidate_roots[0] / draft_.pack_id;
   }
 
   std::error_code ec;
@@ -694,12 +742,9 @@ bool ChallengeEditorDialog::SaveSpotToPack() {
     spot_obj["runway"] = 16.0f;
   }
 
+  // If user explicitly captured camera, save it; otherwise omit so default rotating orbit is generated
   if (draft_.has_cam) {
     spot_obj["cam"] = {round2(draft_.cam[0]), round2(draft_.cam[1]), round2(draft_.cam[2])};
-  } else {
-    // Default camera offset 3m back and 1.5m up
-    spot_obj["cam"] = {round2(draft_.site[0] - 2.5f), round2(draft_.site[1] + 1.5f),
-                       round2(draft_.site[2] - 2.5f)};
   }
 
   spot_obj["scores"] = {
@@ -736,11 +781,32 @@ bool ChallengeEditorDialog::SaveSpotToPack() {
   status_message_ = std::string("Challenge '") + draft_.title + "' saved to " + draft_.pack_id + "!";
   status_timer_ = 5.0f;
 
-  // Trigger pack compilation in background so game sees it immediately
-  const std::string compositor_cmd = "python3 tools/pack_compositor.py > /dev/null 2>&1 &";
-  (void)std::system(compositor_cmd.c_str());
+  // Run pack compositor to build compiled .mod archives
+  std::filesystem::path compositor_script = app_root.parent_path() / "tools" / "pack_compositor.py";
+  if (!std::filesystem::exists(compositor_script)) {
+    compositor_script = app_root / "tools" / "pack_compositor.py";
+  }
+  if (!std::filesystem::exists(compositor_script)) {
+    compositor_script = std::filesystem::current_path() / "tools" / "pack_compositor.py";
+  }
+
+  std::string compositor_cmd;
+#if defined(_WIN32)
+  compositor_cmd = "python \"" + compositor_script.string() + "\"";
+#else
+  compositor_cmd = "python3 \"" + compositor_script.string() + "\"";
+#endif
+  if (std::filesystem::exists(compositor_script)) {
+    (void)std::system(compositor_cmd.c_str());
+  }
 
   RefreshDiscoveredPacks();
+
+  if (and_restart && restart_fn_) {
+    REXLOG_INFO("ChallengeEditorDialog: Quick restarting game to test new challenge...");
+    restart_fn_();
+  }
+
   return true;
 }
 

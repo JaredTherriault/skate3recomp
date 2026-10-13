@@ -18,9 +18,11 @@ namespace skate3 {
 class ChallengeEditorDialog final : public rex::ui::ImGuiDialog {
  public:
   using GamepadPollFn = std::function<bool(rex::input::X_INPUT_GAMEPAD*)>;
+  using RestartFn = std::function<void()>;
 
   explicit ChallengeEditorDialog(rex::ui::ImGuiDrawer* drawer,
-                                 GamepadPollFn gamepad_poll = nullptr);
+                                 GamepadPollFn gamepad_poll = nullptr,
+                                 RestartFn restart_fn = nullptr);
   ~ChallengeEditorDialog();
 
   void Show();
@@ -59,9 +61,10 @@ class ChallengeEditorDialog final : public rex::ui::ImGuiDialog {
   void Render3DWorld(ImDrawList* dl, const float drone_pos[3], const float aim_target[3]);
   void RenderUIWindow();
   void RenderGamepadHUD();
-  bool SaveSpotToPack();
+  bool SaveSpotToPack(bool and_restart = false);
 
   GamepadPollFn gamepad_poll_;
+  RestartFn restart_fn_;
   bool visible_ = false;
   bool was_freecam_active_before_ = false;
 
