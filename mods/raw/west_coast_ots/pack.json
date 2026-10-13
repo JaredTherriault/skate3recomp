@@ -162,6 +162,28 @@
         -168.77999877929688
       ],
       "title": "Massive, Mate"
+    },
+    {
+      "category": "Street",
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "jt-ots-plaza-exit-rail",
+      "runway": 39.79999923706055,
+      "scores": {
+        "kill": 1000,
+        "own": 600
+      },
+      "site": [
+        415.67,
+        67.55,
+        -193.85
+      ],
+      "start": [
+        415.99,
+        67.55,
+        -233.63
+      ],
+      "title": "Plaza Exit Rail"
     }
   ],
   "version": "1.0.0"

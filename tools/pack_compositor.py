@@ -600,8 +600,8 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
         if s.endswith('_waitlocator'):
             write_loc(base, pos_off, True, (sx, sy + 0.4, sz), skater_rot, half_box=(12.0, 6.0, 12.0))
         elif s.endswith('_vis_2'):
-            # Hover neon arrow 1.6m above obstacle so it points down cleanly without penetrating
-            write_loc(base, pos_off, True, (sx, sy + 1.6, sz), skater_rot)
+            # Hover neon arrow 0.8m above obstacle so it points down cleanly without penetrating or floating too high
+            write_loc(base, pos_off, True, (sx, sy + 0.8, sz), skater_rot)
         elif s.endswith('_startlocator'):
             write_loc(base, pos_off, True, start_pos, skater_rot, half_box=(2.5, 2.0, 2.5))
         elif any(s.endswith(suf) for suf in ('_vis_1', '_vis_3', '_vis_chev_1', '_vis_chev_2', '_vis_chev_3')):
@@ -902,7 +902,8 @@ def resolve_base_locators(spots):
         claimed = set()
         for spot in d_spots:
             loc = spot.get('locator')
-            if loc and loc in recs and loc not in claimed:
+            # Strict safety: ONLY allow explicitly specified locators if they exist in recs AND are OTS locators!
+            if loc and loc in recs and loc.startswith('ots_') and loc not in claimed:
                 claimed.add(loc)
             else:
                 spot['locator'] = None
@@ -912,11 +913,14 @@ def resolve_base_locators(spots):
                 avail = [l for l in cfg['default_locators'] if l in recs and l not in claimed]
                 if avail:
                     loc = avail[0]
+                    spot['locator'] = loc
+                    claimed.add(loc)
                 else:
-                    unclaimed = [l for l in recs if l not in claimed]
-                    loc = unclaimed[0] if unclaimed else (list(recs)[0] if recs else '')
-                spot['locator'] = loc
-                claimed.add(loc)
+                    # CRITICAL FIX: NEVER hijack non-OTS mission locators (Hall of Meat, street contests, photo ops)!
+                    # Spots beyond the available spare OTS beacons will use their own unique ID
+                    # and remain playable via the Challenge Map / Career menu without corrupting existing missions.
+                    n = spot.get('id', f"{cfg['template'][:-2]}%02d" % spot.get('num', 1))
+                    spot['locator'] = f"{n}_challengelocator_01"
 
 
 def build_rx2(out_dir, spots):
@@ -949,7 +953,8 @@ def build_rx2(out_dir, spots):
 
         for spot in d_spots:
             loc = spot.get('locator')
-            if not loc or loc not in recs:
+            # Safety check: ONLY touch OTS locators, NEVER touch Hall of Meat or other stock missions
+            if not loc or loc not in recs or not loc.startswith('ots_'):
                 continue
 
             r = recs[loc]
@@ -1677,7 +1682,9 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, g
                         s['num'] = reg_num
                         s['id'] = reg_id
                         if reg.get('locator') and not s.get('locator'):
-                            s['locator'] = reg['locator']
+                            reg_loc = str(reg['locator'])
+                            if target != 'base' or reg_loc.startswith('ots_'):
+                                s['locator'] = reg_loc
                         used_nums.add(reg_num)
                         used_ids.add(reg_id)
 

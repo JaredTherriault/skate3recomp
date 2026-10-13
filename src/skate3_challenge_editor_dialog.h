@@ -77,7 +77,6 @@ class ChallengeEditorDialog final : public rex::ui::ImGuiDialog {
   float anim_time_ = 0.0f;
   std::string status_message_;
   float status_timer_ = 0.0f;
-  bool aim_hit_surface_ = false;
 };
 
 }  // namespace skate3
