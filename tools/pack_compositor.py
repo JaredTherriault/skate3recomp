@@ -49,27 +49,74 @@ DEFAULT_PACKS_DIR = REPO_ROOT / 'mods' / 'raw'
 DEFAULT_OUT_DIR = REPO_ROOT / 'mods' / 'compiled'
 
 
-def find_stock_data():
-    candidates = [
+def find_stock_data(game_dir=None, out_dir=None, packs_dir=None):
+    candidates = []
+    if game_dir:
+        candidates.extend([
+            Path(game_dir) / 'data',
+            Path(game_dir),
+        ])
+    if out_dir:
+        candidates.extend([
+            Path(out_dir).resolve().parent.parent / 'game' / 'data',
+            Path(out_dir).resolve().parent.parent / 'data',
+            Path(out_dir).resolve().parent.parent / 'Skate 3' / 'data',
+        ])
+    if packs_dir:
+        candidates.extend([
+            Path(packs_dir).resolve().parent.parent / 'game' / 'data',
+            Path(packs_dir).resolve().parent.parent / 'data',
+            Path(packs_dir).resolve().parent.parent / 'Skate 3' / 'data',
+        ])
+    candidates.extend([
         REPO_ROOT / 'game' / 'data',
         REPO_ROOT / 'data',
         REPO_ROOT / 'Skate3+DLC' / 'Skate 3' / 'data',
-    ]
+    ])
     for c in candidates:
         if c.exists() and (c / 'big' / 'db.big').exists():
             return c
     return STOCK_DATA
 
 
-def find_stock_dlc_big(big_name, folder_id):
+def find_stock_dlc_big(big_name, folder_id, game_dir=None, user_data_dir=None, out_dir=None):
     candidates = [
         STOCK_BIGS_DIR / big_name,
+    ]
+    if out_dir:
+        candidates.append(Path(out_dir).parent / '.stock_cache' / big_name)
+    if user_data_dir:
+        candidates.extend([
+            Path(user_data_dir) / 'content' / '0000000000000000' / '454108E6' / '00000002' / folder_id / big_name,
+            Path(user_data_dir) / 'dlc' / folder_id / big_name,
+            Path(user_data_dir) / 'dlc' / big_name,
+        ])
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        candidates.extend([
+            Path(appdata) / 'skate3' / 'content' / '0000000000000000' / '454108E6' / '00000002' / folder_id / big_name,
+            Path(appdata) / 'skate3' / 'dlc' / folder_id / big_name,
+            Path(appdata) / 'skate3' / 'dlc' / big_name,
+        ])
+    if game_dir:
+        candidates.extend([
+            Path(game_dir) / 'dlc' / folder_id / big_name,
+            Path(game_dir) / 'dlc' / big_name,
+            Path(game_dir).parent / 'dlc' / folder_id / big_name,
+            Path(game_dir).parent / 'dlc' / big_name,
+        ])
+    if out_dir:
+        candidates.extend([
+            Path(out_dir).resolve().parent.parent / 'dlc' / folder_id / big_name,
+            Path(out_dir).resolve().parent.parent / 'dlc' / big_name,
+        ])
+    candidates.extend([
         REPO_ROOT / 'dlc' / folder_id / big_name,
         REPO_ROOT / 'dlc' / big_name,
         REPO_ROOT / 'game' / 'dlc' / folder_id / big_name,
         REPO_ROOT / 'game' / 'dlc' / big_name,
         LOCAL_SHARE_DLC / folder_id / big_name,
-    ]
+    ])
     for c in candidates:
         if c.exists() and c.stat().st_size > 0:
             return c
@@ -244,7 +291,7 @@ DLC_CONFIGS = {
 }
 
 
-def ensure_stock_dlc_bigs():
+def ensure_stock_dlc_bigs(game_dir=None, user_data_dir=None, out_dir=None):
     STOCK_BIGS_DIR.mkdir(parents=True, exist_ok=True)
     mapping = {
         'dway_park_00000000.big': 'E8CB22B7FEA270B0D0188C31BDFE69A71F0B94D145',
@@ -254,16 +301,25 @@ def ensure_stock_dlc_bigs():
     }
     for big_name, folder_id in mapping.items():
         dst = STOCK_BIGS_DIR / big_name
-        src = LOCAL_SHARE_DLC / folder_id / big_name
         if not dst.exists() or dst.stat().st_size == 0:
-            if src.exists() and src.stat().st_size > 0:
+            src = find_stock_dlc_big(big_name, folder_id, game_dir, user_data_dir, out_dir)
+            if src and src != dst and src.exists() and src.stat().st_size > 0:
                 print(f"Caching stock DLC BIG {big_name} to {dst}...")
-                shutil.copy2(src, dst)
+                try:
+                    shutil.copy2(src, dst)
+                except Exception as e:
+                    print(f"Warning: Failed to copy {src} to {dst}: {e}", file=sys.stderr)
         if dst.exists() and dst.stat().st_size > 0:
-            if not src.exists() or src.stat().st_size == 0:
-                (LOCAL_SHARE_DLC / folder_id).mkdir(parents=True, exist_ok=True)
-                print(f"Restoring stock DLC BIG {big_name} to {src}...")
-                shutil.copy2(dst, src)
+            if not LOCAL_SHARE_DLC.exists():
+                pass
+            else:
+                src = LOCAL_SHARE_DLC / folder_id / big_name
+                if not src.exists() or src.stat().st_size == 0:
+                    (LOCAL_SHARE_DLC / folder_id).mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(dst, src)
+                    except Exception:
+                        pass
 
 
 def get_spot_district(spot):
@@ -1048,11 +1104,13 @@ def resolve_dlc_locators(b, cfg, spots):
 
 def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
     print(f"Building {cfg['custom_big']} ({cfg['name']}) with {len(spots)} spot(s)...")
-    stock_path = STOCK_BIGS_DIR / cfg['stock_big']
-    if not stock_path.exists():
-        ensure_stock_dlc_bigs()
-    if not stock_path.exists():
-        raise FileNotFoundError(f"Stock DLC big not found: {stock_path}")
+    stock_path = find_stock_dlc_big(cfg['stock_big'], cfg['folder_id'], GAME_DIR, USER_DATA_DIR, out_dir)
+    if not stock_path or not stock_path.exists():
+        ensure_stock_dlc_bigs(GAME_DIR, USER_DATA_DIR, out_dir)
+        stock_path = find_stock_dlc_big(cfg['stock_big'], cfg['folder_id'], GAME_DIR, USER_DATA_DIR, out_dir)
+    if not stock_path or not stock_path.exists():
+        print(f"Warning: Stock DLC big not found for {cfg['name']} ({cfg['stock_big']}). Skipping DLC pack.", file=sys.stderr)
+        return False
 
     b = bigfile.read(stock_path, cfg['known_folders'])
     resolve_dlc_locators(b, cfg, spots)
@@ -1319,6 +1377,7 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
     mod_path = out_dir / mod_name
     bigfile.write_delta(b, mod_path, stock_path)
     print(f"  + Wrote {mod_name} ({os.path.getsize(mod_path)} bytes, {len(spots)} spot(s))")
+    return True
 
 
 def discover_packs(packs_dir):
@@ -1413,12 +1472,13 @@ def restore_stock_retail(out_dir):
     print("Cleaned mods/compiled: 0 custom packs active. Game runs pure stock retail data.")
 
 
-def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
-    global STOCK_DATA
-    STOCK_DATA = find_stock_data()
-
+def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False, game_dir=None, user_data_dir=None):
+    global STOCK_DATA, GAME_DIR, USER_DATA_DIR
     packs_dir = Path(packs_dir)
     out_dir = Path(out_dir)
+    GAME_DIR = Path(game_dir) if game_dir else None
+    USER_DATA_DIR = Path(user_data_dir) if user_data_dir else None
+    STOCK_DATA = find_stock_data(GAME_DIR, out_dir, packs_dir)
 
     all_packs = discover_packs(packs_dir)
     enabled_packs = [p for p in all_packs if p['enabled']]
@@ -1557,7 +1617,9 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
         if dlc_id in dirty_targets:
             dlc_spots = spots_by_target.get(dlc_id, [])
             if dlc_spots:
-                build_dlc_big(dlc_id, cfg, dlc_spots, pack_dirs_by_spot, out_dir)
+                ok = build_dlc_big(dlc_id, cfg, dlc_spots, pack_dirs_by_spot, out_dir)
+                if not ok:
+                    current_target_hashes[dlc_id] = None
 
     # 7. Build Global Localization & Intro Cameras (miscboot_custom.mod)
     if 'miscboot' in dirty_targets:
@@ -1587,9 +1649,11 @@ def main():
     ap = argparse.ArgumentParser(description="Compose raw challenge packs into .mod binaries.")
     ap.add_argument('--packs-dir', default=str(DEFAULT_PACKS_DIR), help="Directory containing raw mod packs (mods/raw)")
     ap.add_argument('--out-dir', default=str(DEFAULT_OUT_DIR), help="Output compiled mods directory (mods/compiled)")
+    ap.add_argument('--game-dir', default=None, help="Game data directory containing data/big/db.big")
+    ap.add_argument('--user-data-dir', default=None, help="User data directory containing installed DLC")
     ap.add_argument('--force', action='store_true', help="Force recomposition even if state hashes match")
     a = ap.parse_args()
-    return compose(Path(a.packs_dir), Path(a.out_dir), a.force)
+    return compose(Path(a.packs_dir), Path(a.out_dir), a.force, game_dir=a.game_dir, user_data_dir=a.user_data_dir)
 
 
 if __name__ == '__main__':

@@ -63,6 +63,7 @@ double roundeven(double v) {
 }
 #elif defined(__linux__) || defined(__APPLE__)
 #include <spawn.h>
+#include <sys/wait.h>
 #if defined(__APPLE__)
 #include <crt_externs.h>
 #endif
@@ -1740,7 +1741,7 @@ void Skate3BaseApp::InstallModOverrides() {
     }
 
     if (needs_recompile) {
-      std::string py_bin;
+      std::filesystem::path py_bin;
 #ifdef _WIN32
       const std::vector<std::filesystem::path> local_pythons = {
           app_root / "tools" / "python" / "python.exe",
@@ -1751,7 +1752,7 @@ void Skate3BaseApp::InstallModOverrides() {
       };
       for (const auto& lp : local_pythons) {
         if (std::filesystem::exists(lp, active_ec)) {
-          py_bin = "\"" + lp.string() + "\"";
+          py_bin = lp;
           break;
         }
       }
@@ -1767,12 +1768,133 @@ void Skate3BaseApp::InstallModOverrides() {
 #endif
 
       if (!py_bin.empty()) {
-        const std::string sync_cmd = py_bin + " \"" + compositor_script.string() + "\" --packs-dir \"" +
-                                     packs_dir.string() + "\" --out-dir \"" + custom_dir.string() + "\"";
+        const std::filesystem::path log_path = custom_dir.parent_path() / "composer.log";
+        std::vector<std::string> args = {
+            compositor_script.string(),
+            "--packs-dir", packs_dir.string(),
+            "--out-dir", custom_dir.string(),
+        };
+        const auto& game_root = runtime()->game_data_root();
+        if (!game_root.empty()) {
+          args.push_back("--game-dir");
+          args.push_back(game_root.string());
+        }
+        const auto& user_data = runtime()->user_data_root();
+        if (!user_data.empty()) {
+          args.push_back("--user-data-dir");
+          args.push_back(user_data.string());
+        }
+
         REXLOG_INFO("Skate 3 mods: syncing raw packs in {}...", packs_dir.string());
-        const int status = std::system(sync_cmd.c_str());
-        if (status != 0) {
-          REXLOG_WARN("Skate 3 mods: compositor sync returned status {}", status);
+
+#if defined(_WIN32)
+        std::wstring cmd_line;
+        auto append_arg = [&](const std::wstring& warg) {
+          if (!cmd_line.empty()) {
+            cmd_line += L" ";
+          }
+          const bool quote = warg.empty() || warg.find(L' ') != std::wstring::npos ||
+                             warg.find(L'\t') != std::wstring::npos;
+          if (quote) cmd_line += L"\"";
+          for (wchar_t c : warg) {
+            if (c == L'\"') cmd_line += L"\\\"";
+            else cmd_line += c;
+          }
+          if (quote) cmd_line += L"\"";
+        };
+
+        append_arg(py_bin.wstring());
+        for (const auto& a : args) {
+          append_arg(std::wstring(a.begin(), a.end()));
+        }
+
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+
+        HANDLE h_log = INVALID_HANDLE_VALUE;
+        std::error_code ec;
+        std::filesystem::create_directories(log_path.parent_path(), ec);
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        h_log = CreateFileW(log_path.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h_log != INVALID_HANDLE_VALUE) {
+          si.dwFlags |= STARTF_USESTDHANDLES;
+          si.hStdOutput = h_log;
+          si.hStdError = h_log;
+          si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        }
+
+        std::vector<wchar_t> cmd_buf(cmd_line.begin(), cmd_line.end());
+        cmd_buf.push_back(L'\0');
+
+        const std::wstring py_bin_w = py_bin.wstring();
+        const wchar_t* app_name = py_bin.is_absolute() ? py_bin_w.c_str() : nullptr;
+        BOOL success = CreateProcessW(app_name, cmd_buf.data(), nullptr, nullptr,
+                                      h_log != INVALID_HANDLE_VALUE ? TRUE : FALSE,
+                                      CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+        if (!success && app_name != nullptr) {
+          success = CreateProcessW(nullptr, cmd_buf.data(), nullptr, nullptr,
+                                   h_log != INVALID_HANDLE_VALUE ? TRUE : FALSE,
+                                   CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+        }
+
+        if (h_log != INVALID_HANDLE_VALUE) {
+          CloseHandle(h_log);
+        }
+
+        int exit_code = -1;
+        if (success) {
+          WaitForSingleObject(pi.hProcess, 120000);
+          DWORD dw_exit = 0;
+          GetExitCodeProcess(pi.hProcess, &dw_exit);
+          exit_code = static_cast<int>(dw_exit);
+          CloseHandle(pi.hThread);
+          CloseHandle(pi.hProcess);
+        }
+
+        const bool ok = success && (exit_code == 0);
+#else
+        std::string cmd;
+        auto append_shell_arg = [&](const std::string& arg) {
+          if (!cmd.empty()) cmd += " ";
+          cmd += "'";
+          for (char c : arg) {
+            if (c == '\'') cmd += "'\\''";
+            else cmd += c;
+          }
+          cmd += "'";
+        };
+
+        append_shell_arg(py_bin.string());
+        for (const auto& a : args) {
+          append_shell_arg(a);
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(log_path.parent_path(), ec);
+        cmd += " > '" + log_path.string() + "' 2>&1";
+
+        const int status = std::system(cmd.c_str());
+        const int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : status;
+        const bool ok = (exit_code == 0);
+#endif
+
+        if (!ok) {
+          REXLOG_WARN("Skate 3 mods: compositor sync failed (exit_code={})", exit_code);
+          if (std::filesystem::exists(log_path)) {
+            std::ifstream lf(log_path);
+            std::string line;
+            while (std::getline(lf, line)) {
+              if (!line.empty()) {
+                REXLOG_WARN("  [compositor] {}", line);
+              }
+            }
+          }
+        } else {
+          REXLOG_INFO("Skate 3 mods: compositor sync completed successfully");
         }
       } else {
         REXLOG_INFO("Skate 3 mods: Python not available to recompile mods; using existing compiled assets.");
