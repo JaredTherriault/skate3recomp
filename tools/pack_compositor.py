@@ -757,7 +757,17 @@ def build_missions(mb, spots, pack_dirs_by_spot):
         print('  mission %s: %d files, cSim %d B' % (dst_dir, len(files), csim_size))
 
 
-def update_loc_data(d, spots):
+def get_localized_string(val, lang_name='english'):
+    if isinstance(val, dict):
+        short_code = lang_name[:2]
+        for key in (lang_name, short_code, 'english', 'en', 'default'):
+            if key in val:
+                return str(val[key])
+        return str(next(iter(val.values())))
+    return str(val or '')
+
+
+def update_loc_data(d, spots, lang_name='english'):
     magic, inner, count, hsz, pool_off = struct.unpack_from('<5I', d, 0)
     assert magic == 0x39000 and inner == len(d) - 8 and pool_off == 0x1c + 8 * count
     rows = [struct.unpack_from('<II', d, 0x24 + 8 * i) for i in range(count)]
@@ -766,10 +776,12 @@ def update_loc_data(d, spots):
 
     for spot in spots:
         n = spot.get('id', 'OTS_UNIV_%02d' % spot.get('num', 0)).upper()
-        for suf, text in (('TITLE', spot['title']), ('DESC', spot['desc'])):
+        title_str = get_localized_string(spot.get('title', 'Custom Spot'), lang_name)
+        desc_str = get_localized_string(spot.get('desc', 'Lay down your best lines here to own this spot.'), lang_name)
+        for suf, text in (('TITLE', title_str), ('DESC', desc_str)):
             k = loc_hash('ID_CHALLENGE_%s_%s' % (n, suf))
             new_off = len(pool)
-            pool += text.encode('latin1') + b'\0'
+            pool += text.encode('latin1', errors='replace') + b'\0'
             if k in have:
                 rows = [(k2, new_off if k2 == k else o) for k2, o in rows]
             else:
@@ -787,12 +799,27 @@ def update_loc_data(d, spots):
 
 
 def build_loc(mb, spots):
-    e = bigfile.find(mb, LANG)
-    d = bigfile.entry_bytes(e)
-    out = update_loc_data(d, spots)
-    enc = refpack_literals(out)
-    e.data, e.csize, e.size, e.ctype = enc, len(enc), len(out), 1
-    e.modified = True
+    patched_count = 0
+    for entry in mb.entries:
+        if 'fe/languages' in entry.folder and entry.name.startswith('LANGUAGE_') and entry.name.endswith('.BIN') and 'HISTOGRAM' not in entry.name:
+            lang_name = 'english'
+            for candidate in ('english', 'italian', 'french', 'german', 'spanish', 'dutch', 'japanese'):
+                if candidate in entry.folder.lower() or candidate in entry.name.lower():
+                    lang_name = candidate
+                    break
+            d = bigfile.entry_bytes(entry)
+            try:
+                out = update_loc_data(d, spots, lang_name=lang_name)
+                if getattr(entry, 'ctype', 0) == 0:
+                    entry.data, entry.size, entry.csize, entry.ctype = out, len(out), 0, 0
+                else:
+                    enc = refpack_literals(out)
+                    entry.data, entry.csize, entry.size, entry.ctype = enc, len(enc), len(out), 1
+                entry.modified = True
+                patched_count += 1
+            except Exception as ex:
+                print(f"Warning: Failed to patch language table {entry.name}: {ex}", file=sys.stderr)
+    print(f"  + Injected strings into {patched_count} language tables")
 
     # scene_000.bin
     sc_entry = bigfile.find(mb, 'data/scene/scene_000.bin')
@@ -1290,20 +1317,25 @@ def build_dlc_big(dlc_id, cfg, spots, pack_dirs_by_spot, out_dir):
                             new_xml = update_stream_xml(raw_xml, dx, dz)
                         bigfile.add_raw(b, f'data/{xml_type}', f'{n}{suffix}.xml', new_xml)
 
-    # 6. Localization in BIG
-    loc_entry = bigfile.find(b, cfg['lang_file'])
-    if loc_entry:
-        ld = bigfile.entry_bytes(loc_entry)
-        out_loc = update_loc_data(ld, spots)
-        if getattr(loc_entry, 'ctype', 0) == 0:
-            loc_entry.data = out_loc
-            loc_entry.size = len(out_loc)
-            loc_entry.csize = 0
-            loc_entry.ctype = 0
-        else:
-            enc = refpack_literals(out_loc)
-            loc_entry.data, loc_entry.csize, loc_entry.size, loc_entry.ctype = enc, len(enc), len(out_loc), 1
-        loc_entry.modified = True
+    # 6. Localization in BIG (all available languages)
+    for entry in b.entries:
+        if 'fe/languages' in entry.folder and entry.name.startswith('LANGUAGE_') and entry.name.endswith('.BIN') and 'HISTOGRAM' not in entry.name:
+            lang_name = 'english'
+            for candidate in ('english', 'italian', 'french', 'german', 'spanish', 'dutch', 'japanese'):
+                if candidate in entry.folder.lower() or candidate in entry.name.lower():
+                    lang_name = candidate
+                    break
+            ld = bigfile.entry_bytes(entry)
+            try:
+                out_loc = update_loc_data(ld, spots, lang_name=lang_name)
+                if getattr(entry, 'ctype', 0) == 0:
+                    entry.data, entry.size, entry.csize, entry.ctype = out_loc, len(out_loc), 0, 0
+                else:
+                    enc = refpack_literals(out_loc)
+                    entry.data, entry.csize, entry.size, entry.ctype = enc, len(enc), len(out_loc), 1
+                entry.modified = True
+            except Exception as ex:
+                print(f"Warning: Failed to patch DLC language table {entry.name}: {ex}", file=sys.stderr)
 
     # 7. Scene intro
     scene_file = cfg.get('scene_file')
