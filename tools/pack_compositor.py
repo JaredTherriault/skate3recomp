@@ -1473,7 +1473,7 @@ def compose(packs_dir=DEFAULT_PACKS_DIR, out_dir=DEFAULT_OUT_DIR, force=False):
 
     # 4. Compare with saved state to determine dirty targets
     saved_targets = {}
-    target_state_file = state_file if state_file.exists() else legacy_state_file
+    target_state_file = state_file
     if target_state_file.exists():
         try:
             with open(target_state_file, 'r', encoding='utf-8') as f:

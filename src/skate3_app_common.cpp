@@ -1701,62 +1701,71 @@ void Skate3BaseApp::InstallModOverrides() {
 
   const bool has_packs_dir = std::filesystem::is_directory(packs_dir);
   if (has_packs_dir && std::filesystem::exists(compositor_script)) {
-    std::string py_bin;
-#ifdef _WIN32
-    if (std::system("python --version >nul 2>&1") == 0) {
-      py_bin = "python";
+    // Only recompile if compiled mods are missing or if a raw pack manifest is newer than .active
+    bool needs_recompile = false;
+    const auto active_marker = custom_dir / ".active";
+    std::error_code active_ec;
+    if (!std::filesystem::exists(active_marker, active_ec) ||
+        !std::filesystem::exists(custom_dir / "db_custom.mod", active_ec) ||
+        !std::filesystem::exists(custom_dir / "missions_custom.mod", active_ec) ||
+        !std::filesystem::exists(custom_dir / "global_locators_univ.rx2", active_ec)) {
+      needs_recompile = true;
     } else {
+      const auto active_time = std::filesystem::last_write_time(active_marker, active_ec);
+      if (!active_ec) {
+        try {
+          for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                   packs_dir, std::filesystem::directory_options::skip_permission_denied, active_ec)) {
+            if (active_ec) break;
+            if (entry.is_regular_file(active_ec) && entry.path().extension() == ".json") {
+              const auto mod_time = entry.last_write_time(active_ec);
+              if (!active_ec && mod_time > active_time) {
+                needs_recompile = true;
+                break;
+              }
+            }
+          }
+        } catch (...) {
+          // Ignore iterator errors
+        }
+      }
+    }
+
+    if (needs_recompile) {
+      std::string py_bin;
+#ifdef _WIN32
       const std::vector<std::filesystem::path> local_pythons = {
           app_root / "tools" / "python" / "python.exe",
           app_root.parent_path() / "tools" / "python" / "python.exe",
           app_root / "mods" / ".python" / "python.exe",
       };
       for (const auto& lp : local_pythons) {
-        if (std::filesystem::exists(lp)) {
+        if (std::filesystem::exists(lp, active_ec)) {
           py_bin = "\"" + lp.string() + "\"";
           break;
         }
       }
-      if (py_bin.empty()) {
-        REXLOG_INFO("Skate 3 mods: Python not detected. Attempting to download portable Python runtime...");
-        const auto target_py_dir = app_root / "tools" / "python";
-        std::filesystem::create_directories(target_py_dir, dir_ec);
-        const auto zip_dest = target_py_dir / "python-embed.zip";
-        const std::string py_url = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip";
-        const std::string dl_cmd = "curl -s -L -f -o \"" + zip_dest.string() + "\" \"" + py_url + "\"";
-        REXLOG_INFO("Skate 3 mods: Downloading portable Python from {}...", py_url);
-        int dl_status = std::system(dl_cmd.c_str());
-        if (dl_status == 0 && std::filesystem::exists(zip_dest) && std::filesystem::file_size(zip_dest) > 1000000) {
-          const std::string unpack_cmd = "tar -xf \"" + zip_dest.string() + "\" -C \"" + target_py_dir.string() + "\"";
-          int unpack_status = std::system(unpack_cmd.c_str());
-          std::filesystem::remove(zip_dest, dir_ec);
-          if (unpack_status == 0 && std::filesystem::exists(target_py_dir / "python.exe")) {
-            REXLOG_INFO("Skate 3 mods: Portable Python ready in {}", target_py_dir.string());
-            py_bin = "\"" + (target_py_dir / "python.exe").string() + "\"";
-          }
-        }
-        if (py_bin.empty()) {
-          REXLOG_WARN("Skate 3 mods: Portable Python download unavailable/offline. Skipping dynamic mod compilation.");
-        }
+      if (py_bin.empty() && std::system("python --version >nul 2>&1") == 0) {
+        py_bin = "python";
       }
-    }
 #else
-    if (std::system("python3 --version >/dev/null 2>&1") == 0) {
-      py_bin = "python3";
-    } else if (std::system("python --version >/dev/null 2>&1") == 0) {
-      py_bin = "python";
-    } else {
-      REXLOG_WARN("Skate 3 mods: Python not found on system PATH. Skipping dynamic mod compilation.");
-    }
+      if (std::system("python3 --version >/dev/null 2>&1") == 0) {
+        py_bin = "python3";
+      } else if (std::system("python --version >/dev/null 2>&1") == 0) {
+        py_bin = "python";
+      }
 #endif
 
-    if (!py_bin.empty()) {
-      const std::string sync_cmd = py_bin + " \"" + compositor_script.string() + "\" --packs-dir \"" +
-                                   packs_dir.string() + "\" --out-dir \"" + custom_dir.string() + "\"";
-      REXLOG_INFO("Skate 3 mods: syncing raw packs in {}...", packs_dir.string());
-      const int status = std::system(sync_cmd.c_str());
-      if (status != 0) {
-        REXLOG_WARN("Skate 3 mods: compositor sync returned status {}", status);
+      if (!py_bin.empty()) {
+        const std::string sync_cmd = py_bin + " \"" + compositor_script.string() + "\" --packs-dir \"" +
+                                     packs_dir.string() + "\" --out-dir \"" + custom_dir.string() + "\"";
+        REXLOG_INFO("Skate 3 mods: syncing raw packs in {}...", packs_dir.string());
+        const int status = std::system(sync_cmd.c_str());
+        if (status != 0) {
+          REXLOG_WARN("Skate 3 mods: compositor sync returned status {}", status);
+        }
+      } else {
+        REXLOG_INFO("Skate 3 mods: Python not available to recompile mods; using existing compiled assets.");
       }
     }
   }
@@ -1816,53 +1825,54 @@ void Skate3BaseApp::InstallModOverrides() {
 
   auto find_stock_file = [&](const std::string_view guest_subpath, bool is_dlc_big,
                              const std::string& base_hint) -> std::filesystem::path {
-    // 1. Direct path relative to game_data_root (for base-game bigs)
-    if (!is_dlc_big) {
-      auto p = runtime()->game_data_root() / guest_subpath;
-      if (std::filesystem::exists(p) && std::filesystem::file_size(p) > 0) return p;
-      std::string s(guest_subpath);
-      std::replace(s.begin(), s.end(), '\\', '/');
-      p = runtime()->game_data_root() / s;
-      if (std::filesystem::exists(p) && std::filesystem::file_size(p) > 0) return p;
-    }
-
     const std::string filename = !base_hint.empty()
         ? base_hint
         : std::filesystem::path(guest_subpath).filename().string();
 
-    // 2. Check stock_bigs cache folders
-    for (const auto& dir : { app_root / "stock_bigs",
-                            app_root.parent_path() / "build" / "stock_bigs",
-                            app_root / "build" / "stock_bigs",
-                            app_root.parent_path() / "stock_bigs" }) {
-      auto p = dir / filename;
-      if (std::filesystem::exists(p) && std::filesystem::file_size(p) > 0) return p;
-    }
-
-    // 3. Scan user_data_root DLC folders
-    const auto user_root = runtime()->user_data_root();
     std::error_code ec;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(user_root, ec)) {
-      if (ec) break;
-      if (entry.is_regular_file() && entry.path().filename() == filename) {
-        if (entry.path().string().find("custom_bigs") == std::string::npos &&
-            entry.path().string().find("mods") == std::string::npos &&
-            std::filesystem::file_size(entry.path()) > 0) {
-          return entry.path();
-        }
+
+    // 1. Direct candidate paths relative to game_data_root and app_root
+    std::string fwd_subpath(guest_subpath);
+    std::replace(fwd_subpath.begin(), fwd_subpath.end(), '\\', '/');
+
+    const std::vector<std::filesystem::path> direct_candidates = {
+        runtime()->game_data_root() / guest_subpath,
+        runtime()->game_data_root() / fwd_subpath,
+        runtime()->game_data_root() / "data" / "big" / filename,
+        runtime()->game_data_root() / "data" / "content" / filename,
+        runtime()->game_data_root() / "content" / filename,
+        runtime()->game_data_root() / filename,
+        runtime()->game_data_root() / "dlc" / filename,
+        app_root / "dlc" / filename,
+        app_root / "stock_bigs" / filename,
+        app_root.parent_path() / "build" / "stock_bigs" / filename,
+        app_root / "build" / "stock_bigs" / filename,
+        app_root.parent_path() / "stock_bigs" / filename,
+        runtime()->user_data_root() / std::string(kDlcDirectoryName) / filename,
+    };
+
+    for (const auto& p : direct_candidates) {
+      if (std::filesystem::is_regular_file(p, ec) && std::filesystem::file_size(p, ec) > 0) {
+        return p;
       }
+      ec.clear();
     }
 
-    // 4. Scan game_data_root recursively
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(runtime()->game_data_root(), ec)) {
-      if (ec) break;
-      if (entry.is_regular_file() && entry.path().filename() == filename) {
-        if (entry.path().string().find("custom_bigs") == std::string::npos &&
-            entry.path().string().find("mods") == std::string::npos &&
-            std::filesystem::file_size(entry.path()) > 0) {
-          return entry.path();
+    // 2. Safe shallow scan of user DLC drop folder
+    try {
+      const auto user_dlc = runtime()->user_data_root() / std::string(kDlcDirectoryName);
+      if (std::filesystem::is_directory(user_dlc, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(
+                 user_dlc, std::filesystem::directory_options::skip_permission_denied, ec)) {
+          if (ec) break;
+          if (entry.is_regular_file(ec) && entry.path().filename() == filename &&
+              std::filesystem::file_size(entry.path(), ec) > 0) {
+            return entry.path();
+          }
         }
       }
+    } catch (...) {
+      // Ignore any filesystem errors during scanning
     }
 
     return {};
