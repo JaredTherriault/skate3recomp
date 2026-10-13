@@ -487,10 +487,10 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
         log.append('cSim: %d id u64, %d guid u64 (%d guids)' % (c_ids, c_g, len(guids)))
 
     vx0, vx1 = struct.unpack_from('>f', d, 0x290)[0], struct.unpack_from('>f', d, 0x2a0)[0]
-    vy0 = struct.unpack_from('>f', d, 0x294)[0]
+    vy0, vy1 = struct.unpack_from('>f', d, 0x294)[0], struct.unpack_from('>f', d, 0x2a4)[0]
     vz0, vz1 = struct.unpack_from('>f', d, 0x298)[0], struct.unpack_from('>f', d, 0x2a8)[0]
     sx, sy, sz = spot['site']
-    delta = [round(sx - (vx0 + vx1) / 2, 3), round(sy - 5.0 - vy0, 3), round(sz - (vz0 + vz1) / 2, 3)]
+    delta = [round(sx - (vx0 + vx1) / 2, 3), round(sy - (vy0 + vy1) / 2, 3), round(sz - (vz0 + vz1) / 2, 3)]
     if log is not None:
         log.append('cSim: delta %s' % delta)
     string_spans = [(0x520, 0x8c0), (0x1720, 0x1910)]
@@ -515,7 +515,7 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
         margin = 150.0
         axis_win = [
             (min(vx0, vx1) - margin, max(vx0, vx1) + margin),
-            (vy0 - margin, vy0 + margin),
+            (min(vy0, vy1) - margin, max(vy0, vy1) + margin),
             (min(vz0, vz1) - margin, max(vz0, vz1) + margin),
         ]
 
@@ -533,10 +533,14 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
                 moved += 1
                 break
 
+    # Widen obstacle trick detection volume (0x290 = min, 0x2a0 = max) around site
+    # Ensures long rails, stair sets, and ledges are fully covered by scoring
+    det_hx, det_hy, det_hz = 15.0, 6.0, 15.0
+    struct.pack_into('>3f', d, 0x290, round(sx - det_hx, 2), round(sy - det_hy, 2), round(sz - det_hz, 2))
+    struct.pack_into('>3f', d, 0x2a0, round(sx + det_hx, 2), round(sy + det_hy, 2), round(sz + det_hz, 2))
+
     (ux, uz), (px, pz), start_pos = compute_approach_and_start(spot)
     skater_rot = forward_matrix(ux, uz)
-
-    sx, sy, sz = spot['site']
 
     # Compute rotating orbit around obstacle for flythrough cutscene
     if 'cam' in spot and len(spot['cam']) >= 3:
@@ -567,13 +571,14 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
     wait_pts['wait_6'] = start_pos
     wait_rots['wait_6'] = skater_rot
 
-    def write_loc(base, pos_off, is_80, pos, rot):
+    def write_loc(base, pos_off, is_80, pos, rot, half_box=(1.0, 1.0, 1.0)):
         for r in range(3):
             struct.pack_into('>4f', d, pos_off - 48 + r * 16, *rot[r])
         struct.pack_into('>4f', d, pos_off, pos[0], pos[1], pos[2], 1.0)
         if is_80:
-            struct.pack_into('>4f', d, pos_off + 0x10, pos[0] - 1.0, pos[1] - 1.0, pos[2] - 1.0, 0.0)
-            struct.pack_into('>4f', d, pos_off + 0x20, pos[0] + 1.0, pos[1] + 1.0, pos[2] + 1.0, 0.0)
+            hx, hy, hz = half_box
+            struct.pack_into('>4f', d, pos_off + 0x10, pos[0] - hx, pos[1] - hy, pos[2] - hz, 0.0)
+            struct.pack_into('>4f', d, pos_off + 0x20, pos[0] + hx, pos[1] + hy, pos[2] + hz, 0.0)
 
     def hide_loc(base, pos_off, is_80, ref_val):
         struct.pack_into('>4f', d, pos_off, 0.0, -5000.0, 0.0, 1.0)
@@ -593,11 +598,12 @@ def retarget_csim(dec, spot, tpl=None, axis_win=None, log=None):
         s = d[0xff0 + ref_val:].split(b'\0')[0].decode('latin1')
         pos_off = base + 0x40
         if s.endswith('_waitlocator'):
-            write_loc(base, pos_off, True, (sx, sy + 0.4, sz), skater_rot)
+            write_loc(base, pos_off, True, (sx, sy + 0.4, sz), skater_rot, half_box=(12.0, 6.0, 12.0))
         elif s.endswith('_vis_2'):
-            write_loc(base, pos_off, True, (sx, sy + 0.3, sz), skater_rot)
+            # Hover neon arrow 1.6m above obstacle so it points down cleanly without penetrating
+            write_loc(base, pos_off, True, (sx, sy + 1.6, sz), skater_rot)
         elif s.endswith('_startlocator'):
-            write_loc(base, pos_off, True, start_pos, skater_rot)
+            write_loc(base, pos_off, True, start_pos, skater_rot, half_box=(2.5, 2.0, 2.5))
         elif any(s.endswith(suf) for suf in ('_vis_1', '_vis_3', '_vis_chev_1', '_vis_chev_2', '_vis_chev_3')):
             hide_loc(base, pos_off, True, ref_val)
         else:

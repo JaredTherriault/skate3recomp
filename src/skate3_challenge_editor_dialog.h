@@ -59,7 +59,7 @@ class ChallengeEditorDialog final : public rex::ui::ImGuiDialog {
   void ComputeAimTarget(const float drone_pos[3], const float drone_fwd[3], float out_target[3]);
   void ProcessInput(ImGuiIO& io, const float drone_pos[3], const float aim_target[3]);
   void Render3DWorld(ImDrawList* dl, const float drone_pos[3], const float aim_target[3]);
-  void RenderUIWindow();
+  void RenderUIWindow(const float drone_pos[3], const float aim_target[3]);
   void RenderGamepadHUD();
   bool SaveSpotToPack(bool and_restart = false);
 
@@ -77,6 +77,7 @@ class ChallengeEditorDialog final : public rex::ui::ImGuiDialog {
   float anim_time_ = 0.0f;
   std::string status_message_;
   float status_timer_ = 0.0f;
+  bool aim_hit_surface_ = false;
 };
 
 }  // namespace skate3

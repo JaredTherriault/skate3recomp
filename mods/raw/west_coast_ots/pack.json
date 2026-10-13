@@ -1,121 +1,129 @@
 {
-  "id": "west_coast_ots",
-  "name": "West Coast OTS",
-  "version": "1.0.0",
   "author": "Skate 3 Recomp Community",
   "description": "5 custom Own-The-Spot challenges across University District: Snoop, Dre, Eazy-E, Cube, and Warren.",
   "enabled": true,
+  "id": "west_coast_ots",
+  "name": "West Coast OTS",
   "spots": [
     {
-      "key": "snoop",
-      "title": "Snoop",
-      "district": "university",
-      "desc": "Lay down your best lines here to own this spot.",
-      "site": [
-        407.62,
-        73.31,
-        -260.33
-      ],
       "cam": [
         406.95,
         74.66,
         -262.99
       ],
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "snoop",
       "runway": 16.0,
       "scores": {
-        "own": 600,
-        "kill": 1000
-      }
+        "kill": 1000,
+        "own": 600
+      },
+      "site": [
+        407.62,
+        73.31,
+        -260.33
+      ],
+      "title": "Snoop"
     },
     {
-      "key": "dre",
-      "title": "Dre",
-      "district": "university",
-      "desc": "Lay down your best lines here to own this spot.",
-      "site": [
-        430.65,
-        69.37,
-        -249.4
-      ],
       "cam": [
         428.95,
         70.71,
         -251.53
       ],
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "dre",
       "runway": 16.0,
       "scores": {
-        "own": 600,
-        "kill": 1000
-      }
+        "kill": 1000,
+        "own": 600
+      },
+      "site": [
+        430.65,
+        69.37,
+        -249.4
+      ],
+      "title": "Dre"
     },
     {
-      "key": "eazy_e",
-      "title": "Eazy-E",
-      "district": "university",
-      "desc": "Lay down your best lines here to own this spot.",
-      "site": [
-        384.23,
-        69.37,
-        -249.1
-      ],
       "cam": [
         386.94,
         70.72,
         -249.57
       ],
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "eazy_e",
       "runway": 16.0,
       "scores": {
-        "own": 600,
-        "kill": 1000
-      }
+        "kill": 1000,
+        "own": 600
+      },
+      "site": [
+        384.23,
+        69.37,
+        -249.1
+      ],
+      "title": "Eazy-E"
     },
     {
-      "key": "cube",
-      "title": "Cube",
-      "district": "university",
-      "desc": "Lay down your best lines here to own this spot.",
-      "site": [
-        384.07,
-        69.37,
-        -281.96
-      ],
       "cam": [
         385.45,
         70.72,
         -279.6
       ],
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "cube",
       "runway": 16.0,
       "scores": {
-        "own": 600,
-        "kill": 1000
-      }
+        "kill": 1000,
+        "own": 600
+      },
+      "site": [
+        384.07,
+        69.37,
+        -281.96
+      ],
+      "title": "Cube"
     },
     {
-      "key": "warren",
-      "title": "Warren",
-      "district": "university",
-      "desc": "Lay down your best lines here to own this spot.",
-      "site": [
-        429.94,
-        69.36,
-        -283.49
-      ],
       "cam": [
         427.48,
         70.71,
         -284.69
       ],
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "warren",
       "runway": 16.0,
       "scores": {
-        "own": 600,
-        "kill": 1000
-      }
+        "kill": 1000,
+        "own": 600
+      },
+      "site": [
+        429.94,
+        69.36,
+        -283.49
+      ],
+      "title": "Warren"
     },
     {
-      "key": "plaza-rail-exit",
-      "title": "Plaza Rail Exit",
-      "district": "university",
+      "cam": [
+        412.91,
+        69.05,
+        -199.57
+      ],
       "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "plaza-rail-exit",
+      "runway": 25.7,
+      "scores": {
+        "kill": 1000,
+        "own": 600
+      },
       "site": [
         415.41,
         67.55,
@@ -126,16 +134,35 @@
         67.55,
         -222.54
       ],
+      "title": "Plaza Rail Exit"
+    },
+    {
       "cam": [
-        412.91,
-        69.05,
-        -199.57
+        443.3399963378906,
+        77.4800033569336,
+        -208.52000427246094
       ],
-      "runway": 25.7,
+      "category": "Street",
+      "desc": "Lay down your best lines here to own this spot.",
+      "district": "university",
+      "key": "jt-massive-mate-ots",
+      "runway": 32.36000061035156,
       "scores": {
-        "own": 600,
-        "kill": 1000
-      }
+        "kill": 1500,
+        "own": 950
+      },
+      "site": [
+        449.04998779296875,
+        68.94000244140625,
+        -201.13999938964844
+      ],
+      "start": [
+        448.5799865722656,
+        68.94000244140625,
+        -168.77999877929688
+      ],
+      "title": "Massive, Mate"
     }
-  ]
+  ],
+  "version": "1.0.0"
 }

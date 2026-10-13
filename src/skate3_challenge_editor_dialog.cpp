@@ -152,6 +152,158 @@ void Draw3DBeacon(ImDrawList* dl, const float base_pos[3], float height, ImU32 c
   }
 }
 
+// 3D Raycasting against rendered scene geometry items (OBB intersection)
+// Accurately hits elevated platforms, handrails, stair treads, and ledges
+bool RaycastScene(const float ray_orig[3], const float ray_dir[3], float max_dist,
+                  float out_hit[3]) {
+  const auto scene = native_scene::LastFrameScene();
+  if (!scene || scene->items.empty()) {
+    return false;
+  }
+
+  const float dir_len_sq = ray_dir[0] * ray_dir[0] + ray_dir[1] * ray_dir[1] +
+                           ray_dir[2] * ray_dir[2];
+  if (dir_len_sq < 1e-6f) {
+    return false;
+  }
+  const float inv_len = 1.0f / std::sqrt(dir_len_sq);
+  const float d_world[3] = {ray_dir[0] * inv_len, ray_dir[1] * inv_len,
+                            ray_dir[2] * inv_len};
+
+  float best_t = max_dist;
+  float best_hit[3] = {0.0f, 0.0f, 0.0f};
+  bool found = false;
+
+  for (const native_scene::DrawItem& item : scene->items) {
+    if (item.ctx == 0 || item.unlit || item.skinned || item.cloth_quads ||
+        item.hair) {
+      continue;
+    }
+
+    if (item.bbox_max[0] <= item.bbox_min[0] ||
+        item.bbox_max[1] <= item.bbox_min[1] ||
+        item.bbox_max[2] <= item.bbox_min[2]) {
+      continue;
+    }
+
+    const float ex = item.bbox_max[0] - item.bbox_min[0];
+    const float ey = item.bbox_max[1] - item.bbox_min[1];
+    const float ez = item.bbox_max[2] - item.bbox_min[2];
+
+    // Filter out giant sky/distant terrain bounds and micro items
+    if (ex > 150.0f || ey > 150.0f || ez > 150.0f) {
+      continue;
+    }
+    if (ex < 0.02f && ey < 0.02f && ez < 0.02f) {
+      continue;
+    }
+
+    // Handrail / ledge detection padding: expand thin objects by 25cm
+    // so pointing near a rail or edge catches it cleanly over background stairs
+    const bool is_thin = (std::min(ex, ez) < 0.6f || ey < 0.4f);
+    const float pad = is_thin ? 0.25f : 0.0f;
+
+    const float bmin[3] = {item.bbox_min[0] - pad, item.bbox_min[1] - pad,
+                           item.bbox_min[2] - pad};
+    const float bmax[3] = {item.bbox_max[0] + pad, item.bbox_max[1] + pad,
+                           item.bbox_max[2] + pad};
+
+    // Item world matrix: row-vector convention, row 3 is translation
+    const float* w = item.world;
+    const float a = w[0], b = w[1], c = w[2];
+    const float d = w[4], e = w[5], f = w[6];
+    const float g = w[8], h = w[9], i = w[10];
+
+    const float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (std::abs(det) < 1e-6f) {
+      continue;
+    }
+    const float inv_det = 1.0f / det;
+
+    const float inv00 = (e * i - f * h) * inv_det;
+    const float inv01 = (c * h - b * i) * inv_det;
+    const float inv02 = (b * f - c * e) * inv_det;
+
+    const float inv10 = (f * g - d * i) * inv_det;
+    const float inv11 = (a * i - c * g) * inv_det;
+    const float inv12 = (c * d - a * f) * inv_det;
+
+    const float inv20 = (d * h - e * g) * inv_det;
+    const float inv21 = (b * g - a * h) * inv_det;
+    const float inv22 = (a * e - b * d) * inv_det;
+
+    // Transform ray origin and dir into local coordinates:
+    // v_local = (v_world - T) * M_inv
+    const float p_rel[3] = {ray_orig[0] - w[12], ray_orig[1] - w[13],
+                            ray_orig[2] - w[14]};
+
+    const float p_loc[3] = {
+        p_rel[0] * inv00 + p_rel[1] * inv10 + p_rel[2] * inv20,
+        p_rel[0] * inv01 + p_rel[1] * inv11 + p_rel[2] * inv21,
+        p_rel[0] * inv02 + p_rel[1] * inv12 + p_rel[2] * inv22,
+    };
+
+    const float d_loc[3] = {
+        d_world[0] * inv00 + d_world[1] * inv10 + d_world[2] * inv20,
+        d_world[0] * inv01 + d_world[1] * inv11 + d_world[2] * inv21,
+        d_world[0] * inv02 + d_world[1] * inv12 + d_world[2] * inv22,
+    };
+
+    float t_near = 0.0f;
+    float t_far = max_dist;
+    bool intersects = true;
+
+    for (int k = 0; k < 3; ++k) {
+      if (std::abs(d_loc[k]) < 1e-7f) {
+        if (p_loc[k] < bmin[k] || p_loc[k] > bmax[k]) {
+          intersects = false;
+          break;
+        }
+      } else {
+        const float inv_d = 1.0f / d_loc[k];
+        float t1 = (bmin[k] - p_loc[k]) * inv_d;
+        float t2 = (bmax[k] - p_loc[k]) * inv_d;
+        if (t1 > t2) std::swap(t1, t2);
+        if (t1 > t_near) t_near = t1;
+        if (t2 < t_far) t_far = t2;
+        if (t_near > t_far) {
+          intersects = false;
+          break;
+        }
+      }
+    }
+
+    if (!intersects) {
+      continue;
+    }
+
+    const float t_cand = (t_near >= 0.5f) ? t_near : t_far;
+    if (t_cand < 0.5f || t_cand >= max_dist) {
+      continue;
+    }
+
+    // Thin feature preference: if aiming near a rail that sits right against
+    // or above stairs, give the thin obstacle a distance bonus
+    const float effective_t = t_cand - (is_thin ? 0.35f : 0.0f);
+    if (effective_t < best_t) {
+      best_t = effective_t;
+      best_hit[0] = ray_orig[0] + d_world[0] * t_cand;
+      best_hit[1] = ray_orig[1] + d_world[1] * t_cand;
+      best_hit[2] = ray_orig[2] + d_world[2] * t_cand;
+      found = true;
+    }
+  }
+
+  if (found) {
+    out_hit[0] = best_hit[0];
+    out_hit[1] = best_hit[1];
+    out_hit[2] = best_hit[2];
+    return true;
+  }
+
+  return false;
+}
+
 }  // namespace
 
 ChallengeEditorDialog::ChallengeEditorDialog(rex::ui::ImGuiDrawer* drawer,
@@ -303,11 +455,21 @@ void ChallengeEditorDialog::AutoDetectDistrict(const float drone_pos[3]) {
 
 void ChallengeEditorDialog::ComputeAimTarget(const float drone_pos[3], const float drone_fwd[3],
                                             float out_target[3]) {
-  // Ground plane elevation: locked to skater's surface or draft site elevation
+  // First, attempt 3D raycast against rendered world meshes (stairs, platforms, rails, ledges)
+  if (RaycastScene(drone_pos, drone_fwd, 80.0f, out_target)) {
+    aim_hit_surface_ = true;
+    return;
+  }
+
+  aim_hit_surface_ = false;
+
+  // Ground plane elevation fallback: locked to skater's surface or draft site elevation
   float ground_y = drone_pos[1] - 3.5f;
   float skater_pos[3];
   if (draft_.has_site) {
     ground_y = draft_.site[1];
+  } else if (draft_.has_start) {
+    ground_y = draft_.start[1];
   } else if (skate3::coord_dump::GetLastSkaterPosition(skater_pos)) {
     ground_y = skater_pos[1];
   }
@@ -328,8 +490,9 @@ void ChallengeEditorDialog::ComputeAimTarget(const float drone_pos[3], const flo
 }
 
 void ChallengeEditorDialog::ProcessInput(ImGuiIO& io, const float drone_pos[3],
-                                       const float aim_target[3]) {
+                                        const float aim_target[3]) {
   uint16_t cur_buttons = 0;
+  bool lt_held = false;
   native_scene::FreecamGamepadInput gp_in;
 
   if (gamepad_poll_) {
@@ -349,6 +512,7 @@ void ChallengeEditorDialog::ProcessInput(ImGuiIO& io, const float drone_pos[3],
       const float rt = float(pad.right_trigger) / 255.0f;
       const float lt = float(pad.left_trigger) / 255.0f;
       gp_in.move_u = rt - lt;
+      lt_held = (pad.left_trigger > 100);
 
       // Boost
       if ((pad.buttons & rex::input::X_INPUT_GAMEPAD_LEFT_THUMB) ||
@@ -376,30 +540,58 @@ void ChallengeEditorDialog::ProcessInput(ImGuiIO& io, const float drone_pos[3],
   const uint16_t pressed = cur_buttons & ~prev_buttons_;
   prev_buttons_ = cur_buttons;
 
-  // (X) = Set Obstacle Site
-  if ((pressed & rex::input::X_INPUT_GAMEPAD_X) ||
-      (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_1, false))) {
-    std::memcpy(draft_.site, aim_target, sizeof(draft_.site));
+  // Obstacle (Site) Placement:
+  // - D-Pad Up, or LT + X, or Shift + 1: Place directly at Drone position (-0.5m Y)
+  // - X or 1: Place at Reticle (3D surface hit or projected)
+  if ((pressed & rex::input::X_INPUT_GAMEPAD_DPAD_UP) ||
+      ((pressed & rex::input::X_INPUT_GAMEPAD_X) && lt_held) ||
+      (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_1, false) && io.KeyShift)) {
+    draft_.site[0] = drone_pos[0];
+    draft_.site[1] = drone_pos[1] - 0.5f;
+    draft_.site[2] = drone_pos[2];
     draft_.has_site = true;
-    status_message_ = "Obstacle (Site) placed!";
-    status_timer_ = 3.0f;
+    status_message_ = "Obstacle (Site) snapped to Drone position!";
+    status_timer_ = 3.5f;
+  } else if ((pressed & rex::input::X_INPUT_GAMEPAD_X) ||
+             (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_1, false))) {
+    draft_.site[0] = aim_target[0];
+    draft_.site[1] = aim_target[1];
+    draft_.site[2] = aim_target[2];
+    draft_.has_site = true;
+    status_message_ = aim_hit_surface_ ? "Obstacle (Site) snapped to 3D surface!"
+                                       : "Obstacle (Site) placed!";
+    status_timer_ = 3.5f;
   }
 
-  // (Y) = Set Drop-in Start
-  if ((pressed & rex::input::X_INPUT_GAMEPAD_Y) ||
-      (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_2, false))) {
-    std::memcpy(draft_.start, aim_target, sizeof(draft_.start));
+  // Drop-in Start Placement:
+  // - D-Pad Down, or LT + Y, or Shift + 2: Place directly at Drone position (-0.5m Y)
+  // - Y or 2: Place at Reticle (+0.15m clearance above 3D surface to prevent void clipping)
+  if ((pressed & rex::input::X_INPUT_GAMEPAD_DPAD_DOWN) ||
+      ((pressed & rex::input::X_INPUT_GAMEPAD_Y) && lt_held) ||
+      (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_2, false) && io.KeyShift)) {
+    draft_.start[0] = drone_pos[0];
+    draft_.start[1] = drone_pos[1] - 0.5f;
+    draft_.start[2] = drone_pos[2];
     draft_.has_start = true;
-    status_message_ = "Drop-in Start placed!";
-    status_timer_ = 3.0f;
+    status_message_ = "Drop-in Start snapped to Drone position!";
+    status_timer_ = 3.5f;
+  } else if ((pressed & rex::input::X_INPUT_GAMEPAD_Y) ||
+             (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_2, false))) {
+    draft_.start[0] = aim_target[0];
+    draft_.start[1] = aim_target[1] + (aim_hit_surface_ ? 0.15f : 0.0f);
+    draft_.start[2] = aim_target[2];
+    draft_.has_start = true;
+    status_message_ = aim_hit_surface_ ? "Drop-in Start snapped to 3D surface (+0.15m safe height)!"
+                                       : "Drop-in Start placed!";
+    status_timer_ = 3.5f;
   }
 
-  // (RB) = Capture Camera Transform
+  // (RB) or 3 = Capture Camera Transform
   if ((pressed & rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER) ||
       (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_3, false))) {
     std::memcpy(draft_.cam, drone_pos, sizeof(draft_.cam));
     draft_.has_cam = true;
-    status_message_ = "Flythrough Camera captured!";
+    status_message_ = "Flythrough Camera captured from Drone!";
     status_timer_ = 3.0f;
   }
 
@@ -433,17 +625,21 @@ void ChallengeEditorDialog::Render3DWorld(ImDrawList* dl, const float drone_pos[
   const float* vp = scene->view_proj;
   const float* proj = scene->proj;
 
-  // 1. Aim Reticle on Ground
+  // 1. Aim Reticle
   {
     const float pulse = 0.5f + 0.5f * std::sin(anim_time_ * 5.0f);
-    const float reticle_r = 0.8f + 0.2f * pulse;
-    Draw3DRing(dl, aim_target, reticle_r, IM_COL32(0, 220, 255, 230), vp, proj, dw, dh, 32, 2.0f);
-    Draw3DRing(dl, aim_target, reticle_r * 0.4f, IM_COL32(255, 255, 255, 180), vp, proj, dw, dh, 16,
-               1.5f);
+    const float reticle_r = 0.75f + 0.15f * pulse;
+    const ImU32 ring_col = aim_hit_surface_ ? IM_COL32(0, 255, 200, 240)
+                                            : IM_COL32(255, 200, 50, 200);
+    Draw3DRing(dl, aim_target, reticle_r, ring_col, vp, proj, dw, dh, 32, 2.2f);
+    Draw3DRing(dl, aim_target, reticle_r * 0.4f, IM_COL32(255, 255, 255, 200), vp, proj, dw,
+               dh, 16, 1.5f);
 
     ImVec2 center_scr;
     if (Project3D(aim_target, vp, proj, dw, dh, center_scr)) {
-      dl->AddCircleFilled(center_scr, 3.5f, IM_COL32(0, 255, 255, 255));
+      dl->AddCircleFilled(center_scr, 4.0f, ring_col);
+      const char* tag = aim_hit_surface_ ? "SURFACE HIT" : "PROJECTED";
+      dl->AddText(ImVec2(center_scr.x + 8.0f, center_scr.y - 12.0f), ring_col, tag);
     }
   }
 
@@ -502,8 +698,8 @@ void ChallengeEditorDialog::Render3DWorld(ImDrawList* dl, const float drone_pos[
   }
 }
 
-void ChallengeEditorDialog::RenderUIWindow() {
-  ImGui::SetNextWindowSize(ImVec2(380, 560), ImGuiCond_FirstUseEver);
+void ChallengeEditorDialog::RenderUIWindow(const float drone_pos[3], const float aim_target[3]) {
+  ImGui::SetNextWindowSize(ImVec2(390, 600), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(ImVec2(24, 24), ImGuiCond_FirstUseEver);
 
   const ImGuiWindowFlags win_flags = ImGuiWindowFlags_NoCollapse;
@@ -560,33 +756,88 @@ void ChallengeEditorDialog::RenderUIWindow() {
 
     // 3. Markers & Placement
     if (ImGui::CollapsingHeader("Spot Markers", ImGuiTreeNodeFlags_DefaultOpen)) {
-      // Obstacle Site
-      if (draft_.has_site) {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[SET] Obstacle:");
-        ImGui::SameLine();
-        ImGui::Text("(%.1f, %.1f, %.1f)", draft_.site[0], draft_.site[1], draft_.site[2]);
+      if (aim_hit_surface_) {
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.8f, 1.0f), "Reticle Aim: (%.2f, %.2f, %.2f) [3D Surface]",
+                           aim_target[0], aim_target[1], aim_target[2]);
       } else {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "[NOT SET] Obstacle (Site)");
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Reticle Aim: (%.2f, %.2f, %.2f) [Projected]",
+                           aim_target[0], aim_target[1], aim_target[2]);
       }
+      ImGui::Separator();
+
+      // Obstacle Site
+      ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Obstacle (Site):");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Snap Drone##site")) {
+        draft_.site[0] = drone_pos[0];
+        draft_.site[1] = drone_pos[1] - 0.5f;
+        draft_.site[2] = drone_pos[2];
+        draft_.has_site = true;
+        status_message_ = "Obstacle snapped to Drone position!";
+        status_timer_ = 3.0f;
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("+0.2m Y##site")) {
+        draft_.site[1] += 0.2f;
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("-0.2m Y##site")) {
+        draft_.site[1] -= 0.2f;
+      }
+      if (draft_.has_site) {
+        ImGui::DragFloat3("Site (X,Y,Z)", draft_.site, 0.05f, -5000.0f, 5000.0f, "%.2f");
+      } else {
+        ImGui::TextDisabled("  Not set yet. Aim & press X, or hover drone & press D-Pad Up.");
+      }
+
+      ImGui::Spacing();
 
       // Drop-in Start
+      ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "Drop-in Start:");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Snap Drone##start")) {
+        draft_.start[0] = drone_pos[0];
+        draft_.start[1] = drone_pos[1] - 0.5f;
+        draft_.start[2] = drone_pos[2];
+        draft_.has_start = true;
+        status_message_ = "Drop-in Start snapped to Drone position!";
+        status_timer_ = 3.0f;
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("+0.2m Y##start")) {
+        draft_.start[1] += 0.2f;
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("-0.2m Y##start")) {
+        draft_.start[1] -= 0.2f;
+      }
       if (draft_.has_start) {
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "[SET] Drop-in Start:");
-        ImGui::SameLine();
-        ImGui::Text("(%.1f, %.1f, %.1f)", draft_.start[0], draft_.start[1], draft_.start[2]);
+        ImGui::DragFloat3("Start (X,Y,Z)", draft_.start, 0.05f, -5000.0f, 5000.0f, "%.2f");
       } else {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "[NOT SET] Drop-in Start");
+        ImGui::TextDisabled("  Not set yet. Aim & press Y, or hover drone & press D-Pad Down.");
       }
 
+      ImGui::Spacing();
+
       // Flythrough Camera
+      ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Flythrough Cam:");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Capture Drone##cam")) {
+        draft_.cam[0] = drone_pos[0];
+        draft_.cam[1] = drone_pos[1];
+        draft_.cam[2] = drone_pos[2];
+        draft_.has_cam = true;
+        status_message_ = "Flythrough Cam captured from Drone!";
+        status_timer_ = 3.0f;
+      }
       if (draft_.has_cam) {
-        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "[SET] Flythrough Cam:");
         ImGui::SameLine();
-        ImGui::Text("(%.1f, %.1f, %.1f)", draft_.cam[0], draft_.cam[1], draft_.cam[2]);
+        if (ImGui::SmallButton("Revert to Orbit##cam")) {
+          draft_.has_cam = false;
+        }
+        ImGui::DragFloat3("Cam (X,Y,Z)", draft_.cam, 0.05f, -5000.0f, 5000.0f, "%.2f");
       } else {
-        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.35f, 1.0f), "[AUTO] Rotating Orbit Cam");
-        ImGui::SameLine();
-        ImGui::TextDisabled("(Press RB to override)");
+        ImGui::TextDisabled("  Auto: 360-degree rotating orbit around obstacle. (Press RB to capture)");
       }
 
       if (draft_.has_site && draft_.has_start) {
@@ -632,8 +883,8 @@ void ChallengeEditorDialog::RenderGamepadHUD() {
   dl->AddRect(bar_min, bar_max, IM_COL32(255, 255, 255, 45), 8.0f, 0, 1.5f);
 
   const char* const legend =
-      "(L-Stick) Fly Drone  |  (R-Stick) Look  |  (RT/LT) Elevate  |  (X) Set Obstacle  |  "
-      "(Y) Set Drop-in  |  (RB) Cam  |  (B) Exit";
+      "(L-Stick) Fly  |  (R-Stick) Look  |  (RT/LT) Elevate  |  (X) Obstacle  |  "
+      "(Y) Start  |  (D-Pad Up/Dn) Snap Drone  |  (RB) Cam  |  (B) Exit";
   const ImVec2 txt_sz = ImGui::CalcTextSize(legend);
   dl->AddText(ImVec2(bar_min.x + (kBarW - txt_sz.x) * 0.5f, bar_min.y + (kBarH - txt_sz.y) * 0.5f),
               IM_COL32(240, 240, 240, 240), legend);
@@ -839,7 +1090,7 @@ void ChallengeEditorDialog::OnDraw(ImGuiIO& io) {
   Render3DWorld(bg_dl, drone_pos, aim_target);
 
   // Render ImGui Editor Window
-  RenderUIWindow();
+  RenderUIWindow(drone_pos, aim_target);
 
   // Render Gamepad Legend Bar
   RenderGamepadHUD();
