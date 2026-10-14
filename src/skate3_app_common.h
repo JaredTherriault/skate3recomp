@@ -39,6 +39,7 @@ class Skate3BaseApp : public rex::ReXApp {
   void InstallRecipeOverlay();
   void InstallBigDeviceAliases();
   void InstallModOverrides();
+  void SyncPlayerModelMods();
   void InstallDlcPackages();
   void ToggleSimpleSettings();
   void ToggleNativeDebug();

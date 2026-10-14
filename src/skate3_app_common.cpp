@@ -1018,6 +1018,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
         info.version = j.value("version", "1.0.0");
         const bool manifest_enabled = j.value("enabled", true);
         info.enabled = manifest_enabled && !is_disabled_folder;
+        info.is_player_model =
+            j.contains("player_model") || j.contains("custom_character");
+        info.hot_reload = j.value("hot_reload", info.is_player_model);
         result.push_back(std::move(info));
       } catch (...) {
       }
@@ -1089,6 +1092,7 @@ void Skate3BaseApp::ToggleSimpleSettings() {
         }
       }
     }
+    SyncPlayerModelMods();
   };
 
   simple_settings_dialog_ =
@@ -1679,14 +1683,122 @@ class LoggingOverrideDevice : public rex::filesystem::HostPathDevice {
 
 }  // namespace
 
+void Skate3BaseApp::SyncPlayerModelMods() {
+  const auto app_root = rex::filesystem::GetAppRootFolder();
+  std::vector<std::filesystem::path> candidate_pack_dirs;
+  if (app_root.filename() == "build" || app_root.filename() == "build-win") {
+    candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+  }
+  candidate_pack_dirs.push_back(app_root / "mods" / "raw");
+  candidate_pack_dirs.push_back(app_root.parent_path() / "mods" / "raw");
+  if (runtime() && !runtime()->game_data_root().empty()) {
+    candidate_pack_dirs.push_back(runtime()->game_data_root() / "mods" / "raw");
+    candidate_pack_dirs.push_back(runtime()->game_data_root().parent_path() / "mods" / "raw");
+  }
+  candidate_pack_dirs.push_back(app_root / "custom_packs");
+  candidate_pack_dirs.push_back(app_root.parent_path() / "custom_packs");
+  candidate_pack_dirs.push_back(app_root.parent_path() / "build" / "custom_packs");
+  candidate_pack_dirs.push_back(app_root / "build" / "custom_packs");
+
+  std::filesystem::path packs_dir;
+  for (const auto& cpd : candidate_pack_dirs) {
+    if (std::filesystem::is_directory(cpd)) {
+      packs_dir = cpd;
+      break;
+    }
+  }
+  if (packs_dir.empty() || !std::filesystem::is_directory(packs_dir)) {
+    return;
+  }
+
+  bool saw_player_model_pack = false;
+  bool activated_player_model = false;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(packs_dir, ec)) {
+    if (!entry.is_directory()) continue;
+    const std::string folder_name = entry.path().filename().string();
+    const bool is_disabled_folder =
+        folder_name.ends_with(".disabled") || folder_name.ends_with(".off") ||
+        folder_name.ends_with(".bak") || folder_name.ends_with(".tmp");
+    const auto manifest_path = entry.path() / "pack.json";
+    if (!std::filesystem::exists(manifest_path)) continue;
+    try {
+      std::ifstream f(manifest_path);
+      if (!f.is_open()) continue;
+      auto j = nlohmann::json::parse(f, nullptr, false);
+      if (j.is_discarded() || !j.is_object()) continue;
+      const char* key = j.contains("player_model")
+                            ? "player_model"
+                            : (j.contains("custom_character") ? "custom_character" : nullptr);
+      if (!key) continue;
+      saw_player_model_pack = true;
+      const bool enabled = j.value("enabled", true) && !is_disabled_folder;
+      if (!enabled || activated_player_model) continue;
+
+      const auto& pm = j[key];
+      std::string bin_rel = "yorha2b_skate3.bin";
+      if (pm.is_string()) {
+        bin_rel = pm.get<std::string>();
+      } else if (pm.is_object()) {
+        bin_rel = pm.value("bin", std::string("yorha2b_skate3.bin"));
+      }
+
+      std::filesystem::path resolved_bin;
+      const std::filesystem::path candidates[] = {
+          entry.path() / bin_rel,
+          app_root.parent_path() / "analysis" / "yorha2b" / bin_rel,
+          app_root / "analysis" / "yorha2b" / bin_rel,
+          std::filesystem::path(bin_rel),
+      };
+      for (const auto& cand : candidates) {
+        std::error_code file_ec;
+        if (std::filesystem::is_regular_file(cand, file_ec)) {
+          resolved_bin = cand;
+          break;
+        }
+      }
+      if (resolved_bin.empty()) {
+        REXLOG_WARN("Skate 3 mods: player model binary '{}' not found for mod '{}'",
+                    bin_rel, j.value("name", entry.path().stem().string()));
+        continue;
+      }
+
+      rex::cvar::SetFlagByName("skate3_custom_char_path", resolved_bin.string());
+      rex::cvar::SetFlagByName("skate3_custom_char_enable", "true");
+      if (pm.is_object()) {
+        if (pm.contains("keep_stock_eyes") && pm["keep_stock_eyes"].is_boolean()) {
+          rex::cvar::SetFlagByName("skate3_custom_char_keep_stock_eyes",
+                                   pm["keep_stock_eyes"].get<bool>() ? "true" : "false");
+        }
+        if (pm.contains("scale") && pm["scale"].is_number() &&
+            !rex::cvar::HasNonDefaultValue("skate3_custom_char_scale")) {
+          rex::cvar::SetFlagByName("skate3_custom_char_scale",
+                                   std::to_string(pm["scale"].get<double>()));
+        }
+      }
+      activated_player_model = true;
+      REXLOG_INFO("Skate 3 mods: enabled player model replacement '{}' ({})",
+                  j.value("name", entry.path().stem().string()), resolved_bin.string());
+    } catch (...) {
+    }
+  }
+
+  if (saw_player_model_pack && !activated_player_model) {
+    rex::cvar::SetFlagByName("skate3_custom_char_enable", "false");
+    REXLOG_INFO("Skate 3 mods: player model replacement disabled");
+  }
+}
+
 void Skate3BaseApp::InstallModOverrides() {
   if (mods_installed_ || !runtime() || !runtime()->file_system()) {
     return;
   }
   if (!REXCVAR_GET(skate3_mods) || !REXCVAR_GET(skate3_custom_bigs)) {
     REXLOG_INFO("Skate 3 mods: disabled via cvar");
+    rex::cvar::SetFlagByName("skate3_custom_char_enable", "false");
     return;
   }
+  SyncPlayerModelMods();
 
   const auto app_root = rex::filesystem::GetAppRootFolder();
   auto custom_root = std::string(REXCVAR_GET(skate3_mods_dir));

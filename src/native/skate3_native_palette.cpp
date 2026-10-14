@@ -222,6 +222,69 @@ void ProbeInstance(const float* row) {
 // an UpdateBoneTransforms parts array (stride 0x28, same header layout),
 // snapshotted at the hook because the parts arena AND its m_matrices buffers
 // zero by frame end.
+std::mutex g_mesh_model_mu;
+struct MeshModelEntry {
+  uint32_t model = 0;
+  bool is_ubt = false;
+};
+std::unordered_map<uint32_t, MeshModelEntry> g_mesh_to_model;
+std::unordered_map<uint32_t, uint8_t> g_seen_models;
+
+void RecordModelMeshes(uint8_t* base, uint32_t model, bool ubt) {
+  const uint8_t bit = ubt ? 2u : 1u;
+  static thread_local uint32_t tl_model = 0;
+  static thread_local uint8_t tl_mask = 0;
+  if (tl_model == model && (tl_mask & bit) != 0) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_mesh_model_mu);
+    const auto it = g_seen_models.find(model);
+    if (it != g_seen_models.end() && (it->second & bit) != 0) {
+      tl_model = model;
+      tl_mask = it->second;
+      return;
+    }
+  }
+  uint32_t count_w = 0, table = 0;
+  if (!LoadU32(base, model + 0x30, &count_w) ||
+      !LoadU32(base, model + 0x24, &table) || !PlausiblePtr(table)) {
+    return;
+  }
+  const uint32_t nmesh = count_w & 0xFFFF;
+  const uint32_t nbones = count_w >> 16;
+  if (nmesh == 0 || nmesh > 64 || nbones == 0 || nbones > 100) {
+    return;
+  }
+  uint32_t meshes[64];
+  uint32_t nvalid = 0;
+  for (uint32_t k = 0; k < nmesh; ++k) {
+    uint32_t m8 = 0;
+    if (LoadU32(base, table + k * 8, &m8) && PlausiblePtr(m8)) {
+      meshes[nvalid++] = m8;
+    }
+  }
+  if (nvalid == 0) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_mesh_model_mu);
+  if (g_mesh_to_model.size() > 8192) {
+    g_mesh_to_model.clear();
+    g_seen_models.clear();
+  }
+  uint8_t& seen = g_seen_models[model];
+  seen |= bit;
+  tl_model = model;
+  tl_mask = seen;
+  for (uint32_t k = 0; k < nvalid; ++k) {
+    MeshModelEntry& e = g_mesh_to_model[meshes[k]];
+    e.model = model;
+    if (ubt) {
+      e.is_ubt = true;
+    }
+  }
+}
+
 void SnapshotPack(uint8_t* base, uint32_t inst, bool ubt = false) {
   uint32_t head[0x28 / 4];
   if (!GuestTryCopy(head, base + inst, sizeof(head))) {
@@ -238,6 +301,7 @@ void SnapshotPack(uint8_t* base, uint32_t inst, bool ubt = false) {
     }
     return;
   }
+  RecordModelMeshes(base, model, ubt);
   PackSnap snap;
   snap.inst = inst;
   snap.entity = tl_pack_owner;
@@ -930,6 +994,21 @@ void OnFrameBuilt() {
     g_pack_rows.clear();
   }
   MaybeLog();
+}
+
+uint32_t LookupMeshModel(uint32_t mesh, bool* out_is_ubt) {
+  std::lock_guard<std::mutex> lock(g_mesh_model_mu);
+  const auto it = g_mesh_to_model.find(mesh);
+  if (it == g_mesh_to_model.end()) {
+    if (out_is_ubt != nullptr) {
+      *out_is_ubt = false;
+    }
+    return 0;
+  }
+  if (out_is_ubt != nullptr) {
+    *out_is_ubt = it->second.is_ubt;
+  }
+  return it->second.model;
 }
 
 }  // namespace skate3::native_palette

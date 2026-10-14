@@ -167,6 +167,29 @@ REXCVAR_DECLARE(std::string, skate3_native_render_scene_trace_mesh);
 REXCVAR_DECLARE(std::string, skate3_native_render_scene_trace_2d);
 REXCVAR_DECLARE(std::string, skate3_native_render_snapshot_dir);
 
+REXCVAR_DEFINE_BOOL(skate3_custom_char_enable, true, "Skate 3",
+                    "Replace the player skater character model with the custom "
+                    "character mesh (e.g. YoRHa 2B / Eve).")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_STRING(skate3_custom_char_path,
+                      "mods/raw/yorha_2b_player_model/yorha2b_skate3.bin", "Skate 3",
+                      "Path to the custom character binary file (.bin). "
+                      "Hot-reloads automatically when modified on disk.")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_DOUBLE(skate3_custom_char_scale, 1.0, "Skate 3",
+                      "Uniform height/scale multiplier for the custom skater "
+                      "model anchored at the feet/board contact point "
+                      "(1.0 = default height, e.g. 0.92 = shorter, 1.08 = taller).")
+    .range(0.25, 3.0)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_BOOL(skate3_custom_char_keep_stock_eyes, false, "Skate 3",
+                    "Keep Skate 3's stock eyeball DrawItem (Organ) unsuppressed "
+                    "on top of the custom character's built-in eyes.")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 #if (defined(REX_HAS_D3D12) && REX_HAS_D3D12) || (defined(REX_HAS_VULKAN) && REX_HAS_VULKAN)
 
 namespace skate3::native_scene {
@@ -6452,6 +6475,785 @@ static void RenderStaticSunMap(const NativeGuestOutputRenderContext& context,
   g_r.static_sun_valid = true;
 }
 
+// ---- Custom Skater Character Replacement (YoRHa 2B / Eve) -------------------
+constexpr const char* kS3CanonicalBoneNames[70] = {
+    "Hips",               "Spine",              "Spine1",
+    "Spine2",             "Spine3",             "Neck",
+    "Neck1",              "Head",               "LeftShoulder",
+    "LeftArm",            "LeftArmTwist",       "LeftForeArm",
+    "LeftForeArmTwist",   "LeftForeArmTwist1",  "LeftHand",
+    "LeftHandIndex1",     "LeftHandIndex2",     "LeftHandIndex3",
+    "LeftHandMiddle1",    "LeftHandMiddle2",    "LeftHandMiddle3",
+    "LeftInHandPinky",    "LeftHandPinky1",     "LeftHandPinky2",
+    "LeftHandPinky3",     "LeftInHandRing",     "LeftHandRing1",
+    "LeftHandRing2",      "LeftHandRing3",      "LeftHandThumb1",
+    "LeftHandThumb2",     "LeftHandThumb3",     "RightShoulder",
+    "RightArm",           "RightArmTwist",      "RightForeArm",
+    "RightForeArmTwist",  "RightForeArmTwist1", "RightHand",
+    "RightHandIndex1",    "RightHandIndex2",    "RightHandIndex3",
+    "RightHandMiddle1",   "RightHandMiddle2",   "RightHandMiddle3",
+    "RightInHandPinky",   "RightHandPinky1",    "RightHandPinky2",
+    "RightHandPinky3",    "RightInHandRing",    "RightHandRing1",
+    "RightHandRing2",     "RightHandRing3",     "RightHandThumb1",
+    "RightHandThumb2",    "RightHandThumb3",    "RightShoulderHlp",
+    "LeftShoulderHlp",    "LeftUpLeg",          "LeftLeg",
+    "LeftFoot",           "LeftToeBase",        "LeftUpLegTwist",
+    "RightUpLeg",         "RightLeg",           "RightFoot",
+    "RightToeBase",       "RightUpLegTwist",    "RightUpLegHlp",
+    "LeftUpLegHlp",
+};
+
+// Parent index for each of the 70 canonical Skate 3 bones (-1 for Hips root).
+constexpr int8_t kS3ParentBone[70] = {
+    -1, 0,  1,  2,  3,  4,  5,  6,  4,  8,  9,  9,  11, 12, 11, 14, 15, 16,
+    14, 18, 19, 14, 21, 22, 23, 14, 25, 26, 27, 14, 29, 30, 4,  32, 33, 33,
+    35, 36, 35, 38, 39, 40, 38, 42, 43, 38, 45, 46, 47, 38, 49, 50, 51, 38,
+    53, 54, 32, 8,  0,  58, 59, 60, 58, 0,  63, 64, 65, 63, 63, 58,
+};
+
+struct MeshBoneMap {
+  bool valid = false;
+  bool is_human = false;
+  bool is_skateboard = false;
+  bool is_organ_eyes = false;
+  bool is_ubt = false;
+  uint8_t resolve_tries = 0;
+  std::vector<int8_t> palette_to_s3;
+};
+
+struct CustomCharState {
+  nrhi::Device* device = nullptr;
+  std::string loaded_path;
+  std::filesystem::file_time_type loaded_mtime{};
+  bool loaded = false;
+  nrhi::Buffer* vb = nullptr;
+  nrhi::Buffer* ib = nullptr;
+  nrhi::Texture* tex = nullptr;
+  nrhi::TextureView* srv = nullptr;
+  uint32_t num_verts = 0;
+  uint32_t num_indices = 0;
+  float bbox_min[3] = {};
+  float bbox_max[3] = {};
+
+  // Per-frame state populated by PrepareCustomCharFrame
+  bool active_this_frame = false;
+  uint32_t bone_offset = 0;
+  uint32_t char_rows_offset = 0;
+  bool has_char_rows = false;
+  float last_valid_char_rows[18 * 4] = {};
+  bool ever_had_char_rows = false;
+  std::unordered_set<const DrawItem*> suppressed;
+  std::unordered_map<uint32_t, MeshBoneMap> mesh_map_cache;
+};
+
+CustomCharState g_custom_char;
+
+void DestroyCustomCharResources() {
+  if (g_custom_char.device != nullptr) {
+    if (g_custom_char.srv) g_custom_char.device->DestroyDeferred(g_custom_char.srv);
+    if (g_custom_char.tex) g_custom_char.device->DestroyDeferred(g_custom_char.tex);
+    if (g_custom_char.vb) g_custom_char.device->DestroyDeferred(g_custom_char.vb);
+    if (g_custom_char.ib) g_custom_char.device->DestroyDeferred(g_custom_char.ib);
+  }
+  g_custom_char.srv = nullptr;
+  g_custom_char.tex = nullptr;
+  g_custom_char.vb = nullptr;
+  g_custom_char.ib = nullptr;
+  g_custom_char.loaded = false;
+}
+
+bool EnsureCustomCharacter(const NativeGuestOutputRenderContext& context) {
+  nrhi::Device* device = context.device;
+  if (g_custom_char.device != device) {
+    g_custom_char.srv = nullptr;
+    g_custom_char.tex = nullptr;
+    g_custom_char.vb = nullptr;
+    g_custom_char.ib = nullptr;
+    g_custom_char.loaded = false;
+    g_custom_char.device = device;
+  }
+  const std::string cvar_path(REXCVAR_GET(skate3_custom_char_path));
+  if (cvar_path.empty()) {
+    return false;
+  }
+  std::filesystem::path resolved(cvar_path);
+  std::error_code ec;
+  if (!std::filesystem::exists(resolved, ec)) {
+    std::filesystem::path p1 = std::filesystem::path("..") / resolved;
+    std::filesystem::path p2 = std::filesystem::path("../..") / resolved;
+    if (std::filesystem::exists(p1, ec)) {
+      resolved = p1;
+    } else if (std::filesystem::exists(p2, ec)) {
+      resolved = p2;
+    } else {
+      return false;
+    }
+  }
+  const auto mtime = std::filesystem::last_write_time(resolved, ec);
+  if (g_custom_char.loaded && g_custom_char.loaded_path == resolved.string() &&
+      g_custom_char.loaded_mtime == mtime) {
+    return true;
+  }
+
+  std::ifstream in(resolved, std::ios::binary);
+  if (!in) {
+    return false;
+  }
+  struct Header {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t num_verts;
+    uint32_t num_indices;
+    uint32_t tex_w;
+    uint32_t tex_h;
+    float bbox_min[3];
+    float bbox_max[3];
+  } hdr{};
+  if (!in.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) ||
+      hdr.magic != 0x32425333u || hdr.version != 1 || hdr.num_verts == 0 ||
+      hdr.num_verts > 65535 || hdr.num_indices == 0 || hdr.tex_w == 0 ||
+      hdr.tex_h == 0) {
+    REXLOG_WARN("native-scene: invalid custom char header in {}",
+                resolved.string());
+    return false;
+  }
+
+  const size_t vb_bytes = size_t(hdr.num_verts) * 56;
+  const size_t ib_bytes = size_t(hdr.num_indices) * 2;
+  const size_t tex_bytes = size_t(hdr.tex_w) * hdr.tex_h * 4;
+  std::vector<uint8_t> vb_data(vb_bytes);
+  std::vector<uint8_t> ib_data(ib_bytes);
+  std::vector<uint8_t> tex_data(tex_bytes);
+  if (!in.read(reinterpret_cast<char*>(vb_data.data()), std::streamsize(vb_bytes)) ||
+      !in.read(reinterpret_cast<char*>(ib_data.data()), std::streamsize(ib_bytes)) ||
+      !in.read(reinterpret_cast<char*>(tex_data.data()), std::streamsize(tex_bytes))) {
+    REXLOG_WARN("native-scene: truncated custom char payload in {}",
+                resolved.string());
+    return false;
+  }
+
+  DestroyCustomCharResources();
+
+  g_custom_char.vb =
+      CreateUploadBuffer(device, vb_bytes, nrhi::BufferBindClass::kVertexIndex);
+  g_custom_char.ib =
+      CreateUploadBuffer(device, ib_bytes, nrhi::BufferBindClass::kVertexIndex);
+  if (!g_custom_char.vb || !g_custom_char.ib) {
+    DestroyCustomCharResources();
+    return false;
+  }
+  void* vb_map = device->Map(g_custom_char.vb);
+  std::memcpy(vb_map, vb_data.data(), vb_bytes);
+  device->Unmap(g_custom_char.vb);
+
+  void* ib_map = device->Map(g_custom_char.ib);
+  std::memcpy(ib_map, ib_data.data(), ib_bytes);
+  device->Unmap(g_custom_char.ib);
+
+  // Build a 5-mip chain (2048 -> 1024 -> 512 -> 256 -> 128) for clean filtering
+  constexpr uint32_t kNumMips = 5;
+  nrhi::TextureDesc td;
+  td.width = hdr.tex_w;
+  td.height = hdr.tex_h;
+  td.mip_levels = kNumMips;
+  td.format = nrhi::Format::kR8G8B8A8_UNORM;
+  td.initial_state = nrhi::ResourceState::kCopyDest;
+  g_custom_char.tex = device->CreateTexture(td);
+  if (!g_custom_char.tex) {
+    DestroyCustomCharResources();
+    return false;
+  }
+
+  std::vector<std::vector<uint8_t>> mips(kNumMips);
+  mips[0] = std::move(tex_data);
+  uint32_t mw = hdr.tex_w, mh = hdr.tex_h;
+  size_t total_upload = 0;
+  uint32_t mip_off[kNumMips] = {};
+  uint32_t mip_pitch[kNumMips] = {};
+  for (uint32_t m = 0; m < kNumMips; ++m) {
+    if (m > 0) {
+      const uint32_t pw = mw * 2, ph = mh * 2;
+      const uint8_t* prev = mips[m - 1].data();
+      mips[m].resize(size_t(mw) * mh * 4);
+      uint8_t* dst = mips[m].data();
+      for (uint32_t y = 0; y < mh; ++y) {
+        for (uint32_t x = 0; x < mw; ++x) {
+          const uint8_t* p00 = prev + (size_t(y * 2 + 0) * pw + (x * 2 + 0)) * 4;
+          const uint8_t* p10 = prev + (size_t(y * 2 + 0) * pw + (x * 2 + 1)) * 4;
+          const uint8_t* p01 = prev + (size_t(y * 2 + 1) * pw + (x * 2 + 0)) * 4;
+          const uint8_t* p11 = prev + (size_t(y * 2 + 1) * pw + (x * 2 + 1)) * 4;
+          uint8_t* out = dst + (size_t(y) * mw + x) * 4;
+          for (int c = 0; c < 4; ++c) {
+            out[c] = uint8_t((uint32_t(p00[c]) + p10[c] + p01[c] + p11[c] + 2u) >> 2);
+          }
+        }
+      }
+    }
+    total_upload = (total_upload + kUploadPlacementAlignment - 1) &
+                   ~size_t(kUploadPlacementAlignment - 1);
+    mip_off[m] = uint32_t(total_upload);
+    mip_pitch[m] = (mw * 4u + nrhi::kRowPitchAlignment - 1u) &
+                   ~(nrhi::kRowPitchAlignment - 1u);
+    total_upload += size_t(mip_pitch[m]) * mh;
+    mw = std::max(1u, mw >> 1);
+    mh = std::max(1u, mh >> 1);
+  }
+
+  nrhi::Buffer* upload =
+      CreateUploadBuffer(device, total_upload, nrhi::BufferBindClass::kCopySrc);
+  if (!upload) {
+    DestroyCustomCharResources();
+    return false;
+  }
+  uint8_t* up_ptr = static_cast<uint8_t*>(device->Map(upload));
+  mw = hdr.tex_w;
+  mh = hdr.tex_h;
+  for (uint32_t m = 0; m < kNumMips; ++m) {
+    const uint8_t* src = mips[m].data();
+    uint8_t* dst = up_ptr + mip_off[m];
+    for (uint32_t y = 0; y < mh; ++y) {
+      std::memcpy(dst + size_t(y) * mip_pitch[m], src + size_t(y) * mw * 4,
+                  size_t(mw) * 4);
+    }
+    mw = std::max(1u, mw >> 1);
+    mh = std::max(1u, mh >> 1);
+  }
+  device->Unmap(upload);
+
+  mw = hdr.tex_w;
+  mh = hdr.tex_h;
+  for (uint32_t m = 0; m < kNumMips; ++m) {
+    context.cmd->CopyBufferToTexture(g_custom_char.tex, m, 0, upload,
+                                     mip_off[m], mip_pitch[m], mw, mh, 1);
+    mw = std::max(1u, mw >> 1);
+    mh = std::max(1u, mh >> 1);
+  }
+  context.cmd->Barrier(g_custom_char.tex, nrhi::ResourceState::kCopyDest,
+                       nrhi::ResourceState::kPixelShaderResource);
+  device->DestroyDeferred(upload);
+
+  nrhi::TextureViewDesc vd;
+  vd.mip_levels = kNumMips;
+  g_custom_char.srv = device->CreateTextureView(g_custom_char.tex, vd);
+  if (!g_custom_char.srv) {
+    DestroyCustomCharResources();
+    return false;
+  }
+
+  g_custom_char.num_verts = hdr.num_verts;
+  g_custom_char.num_indices = hdr.num_indices;
+  std::memcpy(g_custom_char.bbox_min, hdr.bbox_min, sizeof(hdr.bbox_min));
+  std::memcpy(g_custom_char.bbox_max, hdr.bbox_max, sizeof(hdr.bbox_max));
+  g_custom_char.loaded_path = resolved.string();
+  g_custom_char.loaded_mtime = mtime;
+  g_custom_char.loaded = true;
+  REXLOG_INFO(
+      "native-scene: loaded custom character '{}' ({} verts, {} indices, {}x{})",
+      resolved.string(), hdr.num_verts, hdr.num_indices, hdr.tex_w, hdr.tex_h);
+  return true;
+}
+
+const MeshBoneMap& ResolveMeshBoneMap(uint8_t* base, uint32_t mesh_addr,
+                                      uint32_t instance_addr) {
+  if (g_custom_char.mesh_map_cache.size() > 4096) {
+    g_custom_char.mesh_map_cache.clear();
+  }
+  auto it = g_custom_char.mesh_map_cache.find(mesh_addr);
+  if (it != g_custom_char.mesh_map_cache.end() &&
+      (it->second.valid || it->second.resolve_tries >= 2)) {
+    if (it->second.is_human && !it->second.is_ubt &&
+        it->second.resolve_tries < 4) {
+      ++it->second.resolve_tries;
+      bool ubt = false;
+      if (skate3::native_palette::LookupMeshModel(mesh_addr, &ubt) != 0 && ubt) {
+        it->second.is_ubt = true;
+      }
+    }
+    return it->second;
+  }
+  MeshBoneMap& out = g_custom_char.mesh_map_cache[mesh_addr];
+  const uint8_t tries = uint8_t(out.resolve_tries + 1u);
+  out = MeshBoneMap{};
+  out.resolve_tries = tries;
+
+  auto load_u32 = [&](uint32_t addr, uint32_t* val) -> bool {
+    if (addr < 0x10000 || addr >= 0x84A10000) return false;
+    uint32_t raw = 0;
+    if (!GuestTryCopy(&raw, base + addr, 4)) return false;
+    *val = SwapU32(raw);
+    return true;
+  };
+  auto load_u16 = [&](uint32_t addr, uint16_t* val) -> bool {
+    if (addr < 0x10000 || addr >= 0x84A10000) return false;
+    uint16_t raw = 0;
+    if (!GuestTryCopy(&raw, base + addr, 2)) return false;
+    *val = SwapU16(raw);
+    return true;
+  };
+
+  uint32_t mb_cnt = 0, mb_idx_ptr = 0;
+  if (!load_u32(mesh_addr + 0x48, &mb_cnt) ||
+      !load_u32(mesh_addr + 0x4C, &mb_idx_ptr) || mb_cnt == 0 || mb_cnt > 96 ||
+      mb_idx_ptr < 0x10000) {
+    out.resolve_tries = 2;
+    return out;
+  }
+
+  auto is_valid_cmodel = [&](uint32_t cand) -> bool {
+    if (cand < 0x10000 || cand >= 0x84A10000) return false;
+    uint16_t cm_nmesh = 0, cm_nbones = 0;
+    uint32_t cm_names = 0;
+    return load_u16(cand + 0x32, &cm_nmesh) &&
+           load_u16(cand + 0x34, &cm_nbones) &&
+           load_u32(cand + 0x28, &cm_names) && cm_nmesh >= 1 &&
+           cm_nmesh <= 64 && cm_nbones >= 1 && cm_nbones <= 100 &&
+           cm_names >= 0x10000 && cm_names < 0x84A10000;
+  };
+
+  // Locate cModel:
+  // 1. Live palette store (recorded during sub_827A52C8 / sub_827E5B30 before
+  //    the player's transient per-frame parts arena is wiped).
+  // 2. *(u32*)(instance_addr + 0) when the cModelInstance is still live.
+  // 3. Adjacent cModel header right after mesh_addr (ibp == cand + 0x40).
+  uint32_t cmodel =
+      skate3::native_palette::LookupMeshModel(mesh_addr, &out.is_ubt);
+  if (cmodel != 0 && !is_valid_cmodel(cmodel)) {
+    cmodel = 0;
+  }
+  if (cmodel == 0 && instance_addr != 0) {
+    uint32_t cand = 0;
+    if (load_u32(instance_addr, &cand) && is_valid_cmodel(cand)) {
+      cmodel = cand;
+    }
+  }
+  if (cmodel == 0) {
+    const uint32_t start = (mesh_addr + 0x70u) & ~15u;
+    for (uint32_t cand = start; cand <= mesh_addr + 0x1200u; cand += 16u) {
+      uint32_t ibp = 0;
+      if (load_u32(cand + 0x20, &ibp) && ibp == cand + 0x40u &&
+          is_valid_cmodel(cand)) {
+        cmodel = cand;
+        break;
+      }
+    }
+  }
+  if (cmodel == 0) {
+    return out;
+  }
+
+  uint16_t nmesh = 0, nbones = 0;
+  uint32_t name_ptrs = 0;
+  if (!load_u16(cmodel + 0x32, &nmesh) || !load_u16(cmodel + 0x34, &nbones) ||
+      !load_u32(cmodel + 0x28, &name_ptrs) || nbones == 0 || nbones > 100 ||
+      name_ptrs < 0x10000) {
+    return out;
+  }
+
+  out.palette_to_s3.assign(mb_cnt, -1);
+  bool saw_left_eye = false, saw_right_eye = false;
+  for (uint32_t k = 0; k < mb_cnt; ++k) {
+    uint16_t b = 0;
+    uint32_t str_ptr = 0;
+    if (!load_u16(mb_idx_ptr + k * 2, &b) || b >= nbones ||
+        !load_u32(name_ptrs + uint32_t(b) * 4, &str_ptr) || str_ptr < 0x10000) {
+      continue;
+    }
+    char bname[32] = {};
+    if (!GuestTryCopy(bname, base + str_ptr, sizeof(bname) - 1)) {
+      continue;
+    }
+    bname[sizeof(bname) - 1] = '\0';
+    if (std::strcmp(bname, "Truck_Back") == 0 ||
+        std::strcmp(bname, "Truck_Front") == 0 ||
+        std::strcmp(bname, "Left_WheelBack") == 0 ||
+        std::strcmp(bname, "Right_WheelBack") == 0) {
+      out.is_skateboard = true;
+      continue;
+    }
+    if (std::strcmp(bname, "LeftEye") == 0) {
+      saw_left_eye = true;
+      out.is_human = true;
+      continue;
+    }
+    if (std::strcmp(bname, "RightEye") == 0) {
+      saw_right_eye = true;
+      out.is_human = true;
+      continue;
+    }
+    for (int s3 = 0; s3 < 70; ++s3) {
+      if (std::strcmp(bname, kS3CanonicalBoneNames[s3]) == 0) {
+        out.palette_to_s3[k] = int8_t(s3);
+        out.is_human = true;
+        break;
+      }
+    }
+    if (out.palette_to_s3[k] < 0) {
+      if (std::strcmp(bname, "Face") == 0 || std::strcmp(bname, "Jaw") == 0 ||
+          std::strcmp(bname, "Chin") == 0 || std::strcmp(bname, "Tongue") == 0 ||
+          std::strncmp(bname, "Left", 4) == 0 ||
+          std::strncmp(bname, "Right", 5) == 0 ||
+          std::strncmp(bname, "Offset_", 7) == 0) {
+        out.is_human = true;
+      }
+    }
+  }
+  if (mb_cnt == 3 && saw_left_eye && saw_right_eye) {
+    out.is_organ_eyes = true;
+  }
+  out.valid = true;
+  return out;
+}
+
+void PrepareCustomCharFrame(const NativeGuestOutputRenderContext& context,
+                            const FrameScene& scene, uint32_t bone_region,
+                            int32_t debug_mode) {
+  g_custom_char.active_this_frame = false;
+  g_custom_char.suppressed.clear();
+  if (!REXCVAR_GET(skate3_custom_char_enable) || debug_mode == 1) {
+    return;
+  }
+  if (!EnsureCustomCharacter(context)) {
+    return;
+  }
+
+  uint8_t* base = g_guest_base.load(std::memory_order_relaxed);
+  if (base == nullptr) {
+    return;
+  }
+  struct SkaterGroup {
+    uint32_t entity = 0;
+    std::vector<const DrawItem*> items;
+    float bones[70 * 12] = {};
+    uint32_t bone_source_size[70] = {};
+    bool bone_present[70] = {};
+    uint32_t unique_bones = 0;
+    float hips_world[3] = {};
+    bool has_hips = false;
+    bool exact_hips = false;
+    bool has_cac = false;
+    bool has_ubt = false;
+    bool is_colorized = false;
+    const DrawItem* best_lighting_item = nullptr;
+  };
+  std::vector<SkaterGroup> groups;
+
+  auto find_or_create_group = [&](uint32_t entity, const float* world_hint) -> SkaterGroup& {
+    if (entity != 0) {
+      for (SkaterGroup& g : groups) {
+        if (g.entity == entity) return g;
+      }
+    }
+    if (world_hint != nullptr) {
+      for (SkaterGroup& g : groups) {
+        if ((entity == 0 || g.entity == 0 || g.entity == entity) && g.has_hips) {
+          const float dx = g.hips_world[0] - world_hint[0];
+          const float dy = g.hips_world[1] - world_hint[1];
+          const float dz = g.hips_world[2] - world_hint[2];
+          if (dx * dx + dy * dy + dz * dz < 0.72f) {
+            if (g.entity == 0 && entity != 0) {
+              g.entity = entity;
+            }
+            return g;
+          }
+        }
+      }
+    }
+    groups.push_back(SkaterGroup{});
+    groups.back().entity = entity;
+    if (world_hint != nullptr) {
+      std::memcpy(groups.back().hips_world, world_hint, 3 * sizeof(float));
+      groups.back().has_hips = true;
+    }
+    return groups.back();
+  };
+
+  for (const DrawItem& item : scene.items) {
+    if (item.lw_entity != 0 || item.transparent || item.water || item.unlit ||
+        item.env_family != 0 || item.dynobj != 0 || item.char_family >= 6) {
+      continue;
+    }
+    skate3::native_entity::CtxInfo info{};
+    const bool has_ctx =
+        item.ctx != 0 && skate3::native_entity::LookupCtx(item.ctx, &info);
+    const bool is_skater_ent =
+        has_ctx &&
+        (info.cls == skate3::native_entity::EntClass::kSkater ||
+         info.cls == skate3::native_entity::EntClass::kColorized ||
+         info.cls == skate3::native_entity::EntClass::kCac ||
+         info.cls == skate3::native_entity::EntClass::kSkaterAux);
+    if (has_ctx && info.cls == skate3::native_entity::EntClass::kLivingWorld) {
+      continue;
+    }
+
+    if (item.skinned && !item.bones.empty()) {
+      const MeshBoneMap& bmap =
+          ResolveMeshBoneMap(base, item.mesh, has_ctx ? info.instance : 0);
+      if (bmap.is_skateboard || !bmap.is_human) {
+        continue;
+      }
+      // Estimate world hip position from bone 0 (Hips: bind (0, 0.921, 0)),
+      // or any mapped human bone skinning delta matrix, or entity L2W.
+      float world_est[3] = {};
+      bool have_est = false;
+      bool is_exact_hips = false;
+      const uint32_t n_pal =
+          std::min<uint32_t>(uint32_t(item.bones.size() / 12),
+                             uint32_t(bmap.palette_to_s3.size()));
+      for (uint32_t k = 0; k < n_pal; ++k) {
+        const int8_t s3 = bmap.palette_to_s3[k];
+        if (s3 == 0) {
+          const float* m = item.bones.data() + k * 12;
+          world_est[0] = m[0 * 4 + 1] * 0.921f + m[0 * 4 + 3];
+          world_est[1] = m[1 * 4 + 1] * 0.921f + m[1 * 4 + 3];
+          world_est[2] = m[2 * 4 + 1] * 0.921f + m[2 * 4 + 3];
+          have_est = true;
+          is_exact_hips = true;
+          break;
+        }
+      }
+      if (!have_est) {
+        for (uint32_t k = 0; k < n_pal; ++k) {
+          const int8_t s3 = bmap.palette_to_s3[k];
+          if (s3 >= 0 && s3 < 70) {
+            const float* m = item.bones.data() + k * 12;
+            world_est[0] = m[0 * 4 + 1] * 0.921f + m[0 * 4 + 3];
+            world_est[1] = m[1 * 4 + 1] * 0.921f + m[1 * 4 + 3];
+            world_est[2] = m[2 * 4 + 1] * 0.921f + m[2 * 4 + 3];
+            have_est = true;
+            break;
+          }
+        }
+      }
+      if (!have_est && has_ctx) {
+        float ent_rows[12] = {};
+        if (skate3::native_entity::ReadEntityWorldRows(base, item.ctx, ent_rows)) {
+          world_est[0] = ent_rows[0 * 4 + 1] * 0.921f + ent_rows[0 * 4 + 3];
+          world_est[1] = ent_rows[1 * 4 + 1] * 0.921f + ent_rows[1 * 4 + 3];
+          world_est[2] = ent_rows[2 * 4 + 1] * 0.921f + ent_rows[2 * 4 + 3];
+          have_est = true;
+        }
+      }
+      SkaterGroup& grp = find_or_create_group(
+          is_skater_ent ? info.entity : 0u, have_est ? world_est : nullptr);
+      if (have_est && (!grp.has_hips || (is_exact_hips && !grp.exact_hips))) {
+        std::memcpy(grp.hips_world, world_est, sizeof(world_est));
+        grp.has_hips = true;
+        if (is_exact_hips) {
+          grp.exact_hips = true;
+        }
+      }
+      if (item.char_family == 2 || item.char_family == 4 ||
+          (has_ctx && info.cls == skate3::native_entity::EntClass::kCac)) {
+        grp.has_cac = true;
+      }
+      if (bmap.is_ubt) {
+        grp.has_ubt = true;
+      }
+      if (has_ctx && info.cls == skate3::native_entity::EntClass::kColorized) {
+        grp.is_colorized = true;
+      }
+      if (!bmap.is_organ_eyes ||
+          !REXCVAR_GET(skate3_custom_char_keep_stock_eyes)) {
+        grp.items.push_back(&item);
+      }
+      if ((item.char_family == 1 || item.char_family == 2) &&
+          item.char_rows[14 * 4 + 1] > 0.0f && !item.char_alpha) {
+        grp.best_lighting_item = &item;
+      }
+      for (uint32_t k = 0; k < n_pal; ++k) {
+        const int8_t s3 = bmap.palette_to_s3[k];
+        if (s3 >= 0 && s3 < 70) {
+          // Prefer higher-bone-count meshes for upper body (0..57) and any mesh for legs/feet (58..69)
+          const bool take = !grp.bone_present[s3] ||
+                            (s3 < 58 && n_pal > grp.bone_source_size[s3]) ||
+                            (s3 >= 58 && n_pal >= grp.bone_source_size[s3]);
+          if (take) {
+            if (!grp.bone_present[s3]) {
+              grp.bone_present[s3] = true;
+              ++grp.unique_bones;
+            }
+            grp.bone_source_size[s3] = n_pal;
+            std::memcpy(grp.bones + int(s3) * 12, item.bones.data() + k * 12,
+                        12 * sizeof(float));
+          }
+        }
+      }
+    } else if (is_skater_ent &&
+               (item.ropa || (item.char_family >= 1 && item.char_family <= 5) ||
+                item.char_alpha)) {
+      float world_est[3] = {};
+      bool have_est = false;
+      float ent_rows[12] = {};
+      if (skate3::native_entity::ReadEntityWorldRows(base, item.ctx, ent_rows)) {
+        world_est[0] = ent_rows[0 * 4 + 1] * 0.921f + ent_rows[0 * 4 + 3];
+        world_est[1] = ent_rows[1 * 4 + 1] * 0.921f + ent_rows[1 * 4 + 3];
+        world_est[2] = ent_rows[2 * 4 + 1] * 0.921f + ent_rows[2 * 4 + 3];
+        have_est = true;
+      }
+      SkaterGroup& grp =
+          find_or_create_group(info.entity, have_est ? world_est : nullptr);
+      if (item.char_family == 2 || item.char_family == 4 ||
+          info.cls == skate3::native_entity::EntClass::kCac) {
+        grp.has_cac = true;
+      }
+      grp.items.push_back(&item);
+      if ((item.char_family == 1 || item.char_family == 2) &&
+          item.char_rows[14 * 4 + 1] > 0.0f && !item.char_alpha &&
+          grp.best_lighting_item == nullptr) {
+        grp.best_lighting_item = &item;
+      }
+    }
+  }
+
+  // Pick the player skater group:
+  // Prioritize groups with CAS / UBT parts (and not ambient Colorized peds)
+  // that are within camera range, then pick the closest to scene.cam_pos.
+  SkaterGroup* best = nullptr;
+  int best_tier = -1;
+  float best_d2 = 1e30f;
+  for (SkaterGroup& g : groups) {
+    if (g.unique_bones < 8 || !g.has_hips) continue;
+    const float dx = g.hips_world[0] - scene.cam_pos[0];
+    const float dy = g.hips_world[1] - scene.cam_pos[1];
+    const float dz = g.hips_world[2] - scene.cam_pos[2];
+    const float d2 = dx * dx + dy * dy + dz * dz;
+    // Tier 2: CAS skater within 25m of camera
+    // Tier 1: Non-colorized UBT skater within 25m of camera
+    // Tier 0: Any skater
+    int tier = 0;
+    if (d2 < 625.0f) {
+      if (g.has_cac && !g.is_colorized) {
+        tier = 2;
+      } else if (g.has_ubt && !g.is_colorized) {
+        tier = 1;
+      }
+    }
+    if (best == nullptr || tier > best_tier ||
+        (tier == best_tier && d2 < best_d2)) {
+      best = &g;
+      best_tier = tier;
+      best_d2 = d2;
+    }
+  }
+  if (best == nullptr) {
+    return;
+  }
+  for (SkaterGroup& g : groups) {
+    if (&g == best || g.unique_bones > 0) continue;
+    bool merge = (best->entity != 0 && g.entity == best->entity) ||
+                 (best->has_cac && g.has_cac && !g.is_colorized);
+    if (!merge && g.has_hips) {
+      const float dx = g.hips_world[0] - best->hips_world[0];
+      const float dy = g.hips_world[1] - best->hips_world[1];
+      const float dz = g.hips_world[2] - best->hips_world[2];
+      if (dx * dx + dy * dy + dz * dz < 1.44f) {
+        merge = true;
+      }
+    }
+    if (merge) {
+      best->items.insert(best->items.end(), g.items.begin(), g.items.end());
+      if (best->best_lighting_item == nullptr && g.best_lighting_item != nullptr) {
+        best->best_lighting_item = g.best_lighting_item;
+      }
+    }
+  }
+
+  // Fill any unpopulated child/twist bones from their nearest populated parent bone
+  if (!best->bone_present[0]) {
+    for (int s3 = 1; s3 < 70; ++s3) {
+      if (best->bone_present[s3]) {
+        std::memcpy(best->bones, best->bones + s3 * 12, 12 * sizeof(float));
+        best->bone_present[0] = true;
+        break;
+      }
+    }
+  }
+  for (int pass = 0; pass < 4; ++pass) {
+    for (int s3 = 1; s3 < 70; ++s3) {
+      if (!best->bone_present[s3]) {
+        const int8_t p = kS3ParentBone[s3];
+        if (p >= 0 && best->bone_present[p]) {
+          std::memcpy(best->bones + s3 * 12, best->bones + int(p) * 12,
+                      12 * sizeof(float));
+          best->bone_present[s3] = true;
+        }
+      }
+    }
+  }
+
+  // Apply runtime height/scale CVar (skate3_custom_char_scale) anchored at the lowest foot/board contact
+  const float scale = float(REXCVAR_GET(skate3_custom_char_scale));
+  if (std::fabs(scale - 1.0f) > 1e-4f) {
+    const float* mL = best->bones + (best->bone_present[60] ? 60 : 0) * 12;
+    const float* mR = best->bones + (best->bone_present[65] ? 65 : 0) * 12;
+    const float pL[3] = {
+        mL[0 * 4 + 0] * 0.1124f + mL[0 * 4 + 3],
+        mL[1 * 4 + 0] * 0.1124f + mL[1 * 4 + 3],
+        mL[2 * 4 + 0] * 0.1124f + mL[2 * 4 + 3],
+    };
+    const float pR[3] = {
+        mR[0 * 4 + 0] * (-0.1124f) + mR[0 * 4 + 3],
+        mR[1 * 4 + 0] * (-0.1124f) + mR[1 * 4 + 3],
+        mR[2 * 4 + 0] * (-0.1124f) + mR[2 * 4 + 3],
+    };
+    const float anchor[3] = {
+        0.5f * (pL[0] + pR[0]),
+        std::min(pL[1], pR[1]),
+        0.5f * (pL[2] + pR[2]),
+    };
+    for (int s3 = 0; s3 < 70; ++s3) {
+      float* m = best->bones + s3 * 12;
+      for (int r = 0; r < 3; ++r) {
+        m[r * 4 + 0] *= scale;
+        m[r * 4 + 1] *= scale;
+        m[r * 4 + 2] *= scale;
+        m[r * 4 + 3] = m[r * 4 + 3] * scale + (1.0f - scale) * anchor[r];
+      }
+    }
+  }
+
+  // Upload 70-bone palette into g_r.bone_ring
+  const uint32_t bone_bytes = 70 * 12 * sizeof(float);
+  const uint32_t b_off = (g_r.bone_ring_offset + 255u) & ~255u;
+  if (b_off + bone_bytes + 512u > RendererState::kBoneRegionSize) {
+    return;
+  }
+  std::memcpy(g_r.bone_ring_cpu + bone_region + b_off, best->bones, bone_bytes);
+  g_r.bone_ring_offset = b_off + bone_bytes;
+  g_custom_char.bone_offset = b_off;
+
+  // Prepare neutral (untinted) character lighting constant buffer (b2)
+  if (best->best_lighting_item != nullptr) {
+    std::memcpy(g_custom_char.last_valid_char_rows,
+                best->best_lighting_item->char_rows,
+                sizeof(g_custom_char.last_valid_char_rows));
+    // Clear CAC garment/skin tint (ch_tintA.w = 0) so YoRHa 2B keeps true colors
+    g_custom_char.last_valid_char_rows[12 * 4 + 3] = 0.0f;
+    // Ensure opaque alpha (ch_misc.x = 1), defaultcharacter family 1 (ch_misc.y = 1), no lens alpha (ch_misc.z = 0)
+    g_custom_char.last_valid_char_rows[14 * 4 + 0] = 1.0f;
+    g_custom_char.last_valid_char_rows[14 * 4 + 1] = 1.0f;
+    g_custom_char.last_valid_char_rows[14 * 4 + 2] = 0.0f;
+    if (g_custom_char.last_valid_char_rows[13 * 4 + 3] < 0.25f) {
+      g_custom_char.last_valid_char_rows[13 * 4 + 3] = 1.2f;
+    }
+    g_custom_char.ever_had_char_rows = true;
+  }
+  g_custom_char.has_char_rows = g_custom_char.ever_had_char_rows;
+  if (g_custom_char.has_char_rows) {
+    const uint32_t c_off = (g_r.bone_ring_offset + 255u) & ~255u;
+    std::memcpy(g_r.bone_ring_cpu + bone_region + c_off,
+                g_custom_char.last_valid_char_rows,
+                sizeof(g_custom_char.last_valid_char_rows));
+    g_r.bone_ring_offset = c_off + 512u;
+    g_custom_char.char_rows_offset = c_off;
+  }
+
+  for (const DrawItem* it : best->items) {
+    g_custom_char.suppressed.insert(it);
+  }
+  g_custom_char.active_this_frame = true;
+}
+
 bool RenderShadowAtlas(const NativeGuestOutputRenderContext& context,
                        const FrameScene& scene, uint32_t bone_region,
                        int32_t debug_mode, uint32_t* out_draws) {
@@ -6510,6 +7312,10 @@ bool RenderShadowAtlas(const NativeGuestOutputRenderContext& context,
     std::vector<Caster> casters;
     bool any_clip = false;
     for (const DrawItem& item : scene.items) {
+      if (g_custom_char.active_this_frame &&
+          g_custom_char.suppressed.contains(&item)) {
+        continue;
+      }
       if (item.transparent || item.unlit || item.cloth_quads) {
         continue;
       }
@@ -6575,7 +7381,7 @@ bool RenderShadowAtlas(const NativeGuestOutputRenderContext& context,
       }
       casters.push_back(c);
     }
-    if (!casters.empty()) {
+    if (!casters.empty() || g_custom_char.active_this_frame) {
       if (g_r.shadow_in_srv_state) {
         for (nrhi::Texture* res : {g_r.shadow_raw, g_r.shadow_mid, g_r.shadow_final}) {
           cmd->Barrier(res, nrhi::ResourceState::kPixelShaderResource,
@@ -6674,6 +7480,25 @@ bool RenderShadowAtlas(const NativeGuestOutputRenderContext& context,
                                draw.base_vertex);
               ++shadow_draws;
             }
+          }
+          if (phase == 0 && g_custom_char.active_this_frame) {
+            float constants[52] = {};
+            constants[0] = 1.0f;
+            constants[5] = 1.0f;
+            constants[10] = 1.0f;
+            constants[15] = 1.0f;
+            std::memcpy(constants + 16, lightvp, sizeof(lightvp));
+            constants[33] = 1.0f;  // skinned
+            cmd->SetRootConstants(0, 52, constants, 0);
+            cmd->SetBufferSrv(3, g_r.bone_ring,
+                              bone_region + g_custom_char.bone_offset);
+            cmd->SetVertexBuffer(g_custom_char.vb, 0,
+                                 g_custom_char.num_verts * 56u, 56u);
+            cmd->SetIndexBuffer(g_custom_char.ib, 0,
+                                g_custom_char.num_indices * 2u);
+            cmd->SetPrimitiveTopology(nrhi::PrimitiveTopology::kTriangleList);
+            cmd->DrawIndexed(g_custom_char.num_indices, 0, 0);
+            ++shadow_draws;
           }
         }
       }
@@ -7845,6 +8670,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
   const auto shadow_t0 = PerfClock::now();
   const float* sh = scene.shadow_rows;
   const int32_t debug_mode = REXCVAR_GET(skate3_native_render_scene_debug);
+  PrepareCustomCharFrame(context, scene, bone_region, debug_mode);
   cmd->ProfileRegion(nrhi::ProfileStage::kShadow);
   shadow_ready =
       RenderShadowAtlas(context, scene, bone_region, debug_mode, &shadow_draws);
@@ -9805,6 +10631,10 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
   opaque_items.reserve(scene.items.size());
   for (const DrawItem& item : scene.items) {
     const uint32_t index = item_index++;
+    if (g_custom_char.active_this_frame &&
+        g_custom_char.suppressed.contains(&item)) {
+      continue;
+    }
     if (debug_mode == 1) {
       break;
     }
@@ -10047,6 +10877,63 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
   }
   for (const auto& [dist, item] : opaque_items) {
     timed_draw(*item);
+  }
+  if (g_custom_char.active_this_frame && g_custom_char.loaded &&
+      debug_mode != 1) {
+    nrhi::Pipeline* want_pso = use_depth ? g_r.pso : g_r.pso_nodepth;
+    if (scene_pso_bound != want_pso) {
+      cmd->SetPipeline(want_pso);
+      scene_pso_bound = want_pso;
+    }
+    float constants[52] = {};
+    constants[0] = 1.0f;
+    constants[5] = 1.0f;
+    constants[10] = 1.0f;
+    constants[15] = 1.0f;
+    std::memcpy(constants + 16, scene.view_proj, sizeof(scene.view_proj));
+    cmd->SetBufferSrv(3, g_r.bone_ring, bone_region + g_custom_char.bone_offset);
+    if (debug_mode >= 2) {
+      const uint32_t hash = 0x2B2B2B2u * 2654435761u;
+      constants[32] = float((hash >> 0) & 0xFF) / 255.0f;
+      constants[33] = float((hash >> 8) & 0xFF) / 255.0f;
+      constants[34] = float((hash >> 16) & 0xFF) / 255.0f;
+      constants[35] = 1.0f;
+    } else {
+      constants[32] = 0.0f;
+      constants[33] = 1.0f;  // skinned character: alpha = gloss, no alpha-test
+      constants[34] = 0.0f;
+      constants[35] =
+          (g_r.showcase_rows[0] != 0.0f || g_r.showcase_rows[1] != 0.0f)
+              ? -1.0f
+              : 0.0f;
+    }
+    constants[36] = scene.cam_pos[0];
+    constants[37] = scene.cam_pos[1];
+    constants[38] = scene.cam_pos[2];
+    constants[39] = 0.0f;
+    if (debug_mode == 0 && g_custom_char.has_char_rows) {
+      cmd->SetConstantBuffer(9, g_r.bone_ring,
+                             bone_region + g_custom_char.char_rows_offset);
+      constants[39] = g_custom_char.last_valid_char_rows[14 * 4 + 1];
+      g_char_drawn.fetch_add(1, std::memory_order_relaxed);
+    }
+    constants[40] = 1.0f;
+    constants[41] = 1.0f;
+    constants[42] = 1.0f;
+    constants[43] = 1.0f;
+    cmd->SetRootConstants(0, 52, constants, 0);
+    cmd->SetTexture(1, g_custom_char.srv);
+    cmd->SetTexture(2, g_r.white.srv);
+    cmd->SetTexture(4, g_r.white.srv);
+    cmd->SetTexture(5, g_r.white.srv);
+    cmd->SetTexturePair(7, g_r.white_cube.srv,
+                        shadow_ready ? g_r.shadow_srv_final : g_r.white.srv);
+    cmd->SetVertexBuffer(g_custom_char.vb, 0, g_custom_char.num_verts * 56u,
+                         56u);
+    cmd->SetIndexBuffer(g_custom_char.ib, 0, g_custom_char.num_indices * 2u);
+    cmd->SetPrimitiveTopology(nrhi::PrimitiveTopology::kTriangleList);
+    cmd->DrawIndexed(g_custom_char.num_indices, 0, 0);
+    ++drawn;
   }
   if (!transparent_items.empty() && g_r.pso_transparent != nullptr) {
     std::stable_sort(transparent_items.begin(), transparent_items.end(),

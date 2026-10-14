@@ -65,4 +65,9 @@ uint32_t ServeAuthoritativePalettes(uint8_t* base,
 // palette packed during frame N-1) and emits the optional stats line.
 void OnFrameBuilt();
 
+// Look up the cModel* (tRModelData) that owns a given cMesh* (item.mesh),
+// recorded live during OnPackPalette / OnBoneTransforms before transient
+// UBT part arenas are zeroed.
+uint32_t LookupMeshModel(uint32_t mesh, bool* out_is_ubt = nullptr);
+
 }  // namespace skate3::native_palette
