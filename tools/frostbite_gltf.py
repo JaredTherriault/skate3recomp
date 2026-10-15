@@ -37,6 +37,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -1489,17 +1490,51 @@ def patch_reskate_mod_directory(
     if not cas_p.exists():
         raise FileNotFoundError(f"Missing cas_01.cas in {mod_dir}")
 
-    old_uuid_str = "97083fc0-36cf-4786-bac8-26fd407c7237"
+    cas_sample = cas_p.read_bytes()
+
+    # Dynamically auto-detect template parameters from cas_01.cas
+    m_mesh = re.search(rb"characters/maincharacters/reskate/([0-9a-fA-F-]{36})_mesh", cas_sample)
+    if m_mesh:
+        old_uuid_str = m_mesh.group(1).decode("latin1")
+    else:
+        old_uuid_str = "97083fc0-36cf-4786-bac8-26fd407c7237"
     old_uuid_b = old_uuid_str.encode("latin1")
-    old_slug_b = b"yorha2b"
-    old_disp_b = b"Own_YoRHa2B"
+
+    m_item = re.search(rb"items/cust_fullbodycostume/own_own_([a-zA-Z0-9_]+)", cas_sample)
+    if not m_item:
+        m_item = re.search(rb"items/cust_fullbodycostume/own_([a-zA-Z0-9_]+)", cas_sample)
+    if m_item:
+        old_slug_str = m_item.group(1).decode("latin1")
+    else:
+        old_slug_str = "yorha2b"
+    old_slug_b = old_slug_str.encode("latin1")
+
+    old_disp_str = "Own_YoRHa2B"
+    if m_item:
+        m_disp = re.search(rb"(Own_[a-zA-Z0-9_]+)\x00", cas_sample[m_item.start():m_item.start() + 200])
+        if m_disp:
+            old_disp_str = m_disp.group(1).decode("latin1")
+    old_disp_b = old_disp_str.encode("latin1")
 
     lod_guid_map: dict[str, bytes] = {}
     if costume_id:
-        slug7, disp7 = _derive_costume_slug7_and_disp7(costume_id)
-        new_slug_b = slug7.encode("latin1")
-        new_disp_b = f"Own_{disp7}".encode("latin1")
-        new_uuid_str = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reskate.costume.{costume_id.lower()}"))
+        clean = "".join(c for c in costume_id if c.isalnum() or c == "_")
+        if not clean:
+            clean = "Custom1"
+        if len(clean) >= len(old_slug_str):
+            new_slug_str = clean[:len(old_slug_str)].lower()
+        else:
+            new_slug_str = (clean + "_" * len(old_slug_str))[:len(old_slug_str)].lower()
+        new_slug_b = new_slug_str.encode("latin1")
+
+        disp_prefix = f"Own_Own_{clean}" if old_disp_str.startswith("Own_Own_") else f"Own_{clean}"
+        if len(disp_prefix) >= len(old_disp_str):
+            new_disp_str = disp_prefix[:len(old_disp_str)]
+        else:
+            new_disp_str = (disp_prefix + "_" * len(old_disp_str))[:len(old_disp_str)]
+        new_disp_b = new_disp_str.encode("latin1")
+
+        new_uuid_str = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reskate.costume.{new_slug_str}"))
         new_uuid_b = new_uuid_str.encode("latin1")
 
         res_buf = bytearray(res_out)
@@ -1513,8 +1548,8 @@ def patch_reskate_mod_directory(
         res_out = bytes(res_buf).replace(old_uuid_b, new_uuid_b)
         res_cas_bytes = wrap_uncompressed_cas(res_out)
         print(
-            f"[ReSkate Mod] Standalone costume ID: 'Own_{disp7}' "
-            f"(items/cust_fullbodycostume/own_{slug7}, mesh={new_uuid_str}_mesh)"
+            f"[ReSkate Mod] Standalone costume ID: '{new_disp_str}' "
+            f"(items/cust_fullbodycostume/own_{new_slug_str}, mesh={new_uuid_str}_mesh)"
         )
 
     lod_guids = set()
@@ -1695,8 +1730,8 @@ def patch_reskate_mod_directory(
             if costume_id:
                 old_mesh_name_hash = _fb_hash32(f"characters/maincharacters/reskate/{old_uuid_str}_mesh")
                 new_mesh_name_hash = _fb_hash32(f"characters/maincharacters/reskate/{new_uuid_str}_mesh")
-                old_disp_hash = _fb_hash32("Own_YoRHa2B")
-                new_disp_hash = _fb_hash32(f"Own_{disp7}")
+                old_disp_hash = _fb_hash32(old_disp_str)
+                new_disp_hash = _fb_hash32(new_disp_str)
                 for i in range(ebx_cnt):
                     file_idx = 1 + i
                     if file_idx >= len(file_entries) or not file_entries[file_idx][3]:
@@ -1711,7 +1746,7 @@ def patch_reskate_mod_directory(
                         new_ebx = new_ebx.replace(old_rid, new_rid)
                     if e_name.endswith("_mesh"):
                         new_ebx = new_ebx.replace(old_mesh_name_hash, new_mesh_name_hash)
-                    if "own_yorha2b" in e_name:
+                    if (old_slug_str in e_name) or e_name.startswith("items/cust_fullbodycostume/"):
                         # Update HashedAssetKey and set SortPriority to INT32_MAX so custom costumes sort to the top of the closet
                         new_ebx = new_ebx.replace(
                             old_disp_hash + b"\x00\x00\x00\x00",
@@ -1847,21 +1882,88 @@ def patch_reskate_mod_directory(
         except Exception:
             pass
 
+    mods_json_p = mod_dir.parent / "mods.json"
+    if mods_json_p.exists():
+        try:
+            mj = json.loads(mods_json_p.read_text(encoding="utf-8"))
+            if "mods" in mj and isinstance(mj["mods"], list):
+                mod_entry = None
+                for entry in mj["mods"]:
+                    if entry.get("name") == mod_dir.name:
+                        mod_entry = entry
+                        break
+                if mod_entry:
+                    mod_entry["enabled"] = True
+                else:
+                    mj["mods"].append({"enabled": True, "name": mod_dir.name})
+                mods_json_p.write_text(json.dumps(mj, indent=2) + "\n", encoding="utf-8")
+                print(f"[ReSkate Mod] Enabled '{mod_dir.name}' in {mods_json_p}")
+        except Exception as e:
+            print(f"[ReSkate Mod] Warning: Could not update {mods_json_p}: {e}")
+
 
 def cmd_from_gltf(args):
     in_p = Path(args.input)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    template_res_p = Path(args.template_res) if args.template_res else (REPO_ROOT / "analysis" / "yorha2b" / "mesh_res.bin")
-    if not template_res_p.exists():
-        raise FileNotFoundError(f"Template MeshSet resource not found: {template_res_p}")
-    template_res_bytes = template_res_p.read_bytes()
+    template_res_bytes = None
+    if args.template_res:
+        template_res_p = Path(args.template_res)
+        if not template_res_p.exists():
+            raise FileNotFoundError(f"Template MeshSet resource not found: {template_res_p}")
+        template_res_bytes = template_res_p.read_bytes()
+    elif args.template_mod:
+        src_mod = Path(args.template_mod)
+        toc_path = src_mod / "Win32" / "items.toc"
+        cas_path = src_mod / "Win32" / "configurations" / "layout" / "initialinstallpackage" / "cas_01.cas"
+        if toc_path.exists() and cas_path.exists():
+            bundles, _ = parse_toc_bundles_and_chunks(toc_path.read_bytes())
+            candidate_meshes = []
+            for b in bundles:
+                files, man = parse_bundle_region_and_manifest(b["region"], cas_path)
+                if man and man["resources"]:
+                    for idx, r in enumerate(man["resources"]):
+                        if r["name"].endswith("_mesh"):
+                            fi = files[1 + len(man["ebx"]) + idx]
+                            candidate_meshes.append((r["name"], fi))
+            for r_name, fi in candidate_meshes:
+                if "maincharacters/reskate/" in r_name:
+                    template_res_bytes = read_cas_slice(cas_path, fi["offset"], fi["size"])
+                    print(f"[glTF -> Frostbite] Auto-extracted costume MeshSet from {src_mod.name}: {r_name}")
+                    break
+            if not template_res_bytes and candidate_meshes:
+                template_res_bytes = read_cas_slice(cas_path, candidate_meshes[0][1]["offset"], candidate_meshes[0][1]["size"])
+                print(f"[glTF -> Frostbite] Auto-extracted fallback MeshSet from {src_mod.name}: {candidate_meshes[0][0]}")
+
+    if not template_res_bytes:
+        default_res_p = REPO_ROOT / "analysis" / "yorha2b" / "mesh_res.bin"
+        if default_res_p.exists():
+            template_res_bytes = default_res_p.read_bytes()
+        else:
+            raise FileNotFoundError("Could not find or extract a template MeshSet resource")
 
     template_chunk_bytes = None
-    template_chunk_p = Path(args.template_chunk) if args.template_chunk else (REPO_ROOT / "analysis" / "yorha2b" / "real_lod0.bin")
-    if template_chunk_p.exists():
-        template_chunk_bytes = template_chunk_p.read_bytes()
+    if args.template_chunk:
+        template_chunk_p = Path(args.template_chunk)
+        if template_chunk_p.exists():
+            template_chunk_bytes = template_chunk_p.read_bytes()
+    elif args.template_mod and template_res_bytes and len(template_res_bytes) >= 0x164:
+        lod0_guid = template_res_bytes[0x154:0x164].hex()
+        src_mod = Path(args.template_mod)
+        toc_path = src_mod / "Win32" / "items.toc"
+        cas_path = src_mod / "Win32" / "configurations" / "layout" / "initialinstallpackage" / "cas_01.cas"
+        if toc_path.exists() and cas_path.exists():
+            _, chunks = parse_toc_bundles_and_chunks(toc_path.read_bytes())
+            for c in chunks:
+                if c["guid"] == lod0_guid:
+                    template_chunk_bytes = read_cas_slice(cas_path, c["offset"], c["size"])
+                    print(f"[glTF -> Frostbite] Auto-extracted template LOD0 chunk {lod0_guid} from {src_mod.name}")
+                    break
+    if not template_chunk_bytes:
+        default_chunk_p = REPO_ROOT / "analysis" / "yorha2b" / "real_lod0.bin"
+        if default_chunk_p.exists():
+            template_chunk_bytes = default_chunk_p.read_bytes()
 
     temp_glb = None
     try:
