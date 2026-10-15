@@ -720,6 +720,18 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   // skate3_native_render_mode_indicator shows it live). Input-transparent,
   // so it never affects cursor or focus handling.
   render_mode_indicator_ = std::make_unique<skate3::RenderModeIndicator>(drawer);
+  achievement_toast_dialog_ = std::make_unique<skate3::AchievementToastDialog>(drawer);
+  achievement_manager_ = std::make_unique<skate3::AchievementManager>();
+
+  rex::ui::RegisterBind("bind_skate3_achievements", "F2", "Skate 3 achievements", [this] {
+    OpenAchievementsMenu();
+  });
+  rex::ui::RegisterBind("bind_skate3_test_achievement", "Ctrl+F2", "Test achievement unlock popup", [this] {
+    if (achievement_manager_) {
+      achievement_manager_->TestTriggerAchievement(0);
+    }
+  });
+
   rex::ui::RegisterBind("bind_skate3_menu", "Escape", "Skate 3 settings", [this] {
     // Escape backs out of the settings screen level by level (rows ->
     // category rail -> closed); when the screen is closed it opens it.
@@ -861,9 +873,34 @@ void Skate3BaseApp::OnPostSetup() {
       }
     }
   }
+
+  if (achievement_manager_ && runtime()->kernel_state()) {
+    achievement_manager_->Initialize(runtime()->kernel_state(), profiles_path_,
+                                     achievement_toast_dialog_.get(), imgui_drawer());
+    runtime()->kernel_state()->SetAchievementUnlockCallback(
+        [this](uint32_t user_index, uint32_t id) {
+          if (achievement_manager_) {
+            return achievement_manager_->Unlock(user_index, id);
+          }
+          return false;
+        });
+    runtime()->kernel_state()->SetIsAchievementUnlockedCallback(
+        [this](uint32_t user_index, uint32_t id) {
+          if (achievement_manager_) {
+            return achievement_manager_->IsUnlocked(user_index, id);
+          }
+          return false;
+        });
+    runtime()->kernel_state()->SetShowAchievementsUICallback(
+        [this](uint32_t user_index, uint32_t title_id) {
+          app_context().CallInUIThreadDeferred([this] { OpenAchievementsMenu(); });
+        });
+  }
 }
 
 void Skate3BaseApp::OnShutdown() {
+  rex::ui::UnregisterBind("bind_skate3_achievements");
+  rex::ui::UnregisterBind("bind_skate3_test_achievement");
   rex::ui::UnregisterBind("bind_skate3_menu");
   rex::ui::UnregisterBind("bind_skate3_menu_alt");
   rex::ui::UnregisterBind("bind_skate3_save_draw_fingerprints");
@@ -877,16 +914,28 @@ void Skate3BaseApp::OnShutdown() {
   native_debug_dialog_.reset();
   challenge_editor_dialog_.reset();
   render_mode_indicator_.reset();
+  achievement_manager_.reset();
+  achievement_toast_dialog_.reset();
 }
 
-void Skate3BaseApp::ToggleSimpleSettings() {
+void Skate3BaseApp::ToggleSimpleSettings(int initial_category) {
   if (simple_settings_dialog_) {
-    if (simple_settings_dialog_->visible()) {
-      simple_settings_dialog_->Hide();
+    if (initial_category >= 0) {
+      if (!simple_settings_dialog_->visible()) {
+        ApplySettingsCursorMode();
+        skate3::native_scene::SetSettingsMenuBlur(true);
+        simple_settings_dialog_->Show(initial_category);
+      } else {
+        simple_settings_dialog_->SelectCategory(initial_category);
+      }
     } else {
-      ApplySettingsCursorMode();
-      skate3::native_scene::SetSettingsMenuBlur(true);
-      simple_settings_dialog_->Show();
+      if (simple_settings_dialog_->visible()) {
+        simple_settings_dialog_->Hide();
+      } else {
+        ApplySettingsCursorMode();
+        skate3::native_scene::SetSettingsMenuBlur(true);
+        simple_settings_dialog_->Show();
+      }
     }
     return;
   }
@@ -925,6 +974,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
     skate3::ApplyProfileCvars(profile);
     ApplyDemoPathProfileOverride();
     ApplySelectedProfileToRuntime();
+    if (achievement_manager_) {
+      achievement_manager_->ReloadForActiveProfile();
+    }
   };
   // Fires on every Hide (B/Esc, Close Settings, Close Game), the one spot
   // that reliably sees the menu close regardless of who initiated it.
@@ -1020,7 +1072,7 @@ void Skate3BaseApp::ToggleSimpleSettings() {
         info.enabled = manifest_enabled && !is_disabled_folder;
         info.is_player_model =
             j.contains("player_model") || j.contains("custom_character");
-        info.hot_reload = j.value("hot_reload", info.is_player_model);
+        info.hot_reload = j.value("hot_reload", info.is_player_model || j.contains("achievements"));
         result.push_back(std::move(info));
       } catch (...) {
       }
@@ -1093,6 +1145,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
       }
     }
     SyncPlayerModelMods();
+    if (achievement_manager_) {
+      achievement_manager_->ReloadDefinitions();
+    }
   };
 
   simple_settings_dialog_ =
@@ -1103,9 +1158,36 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   simple_settings_dialog_->SetOpenChallengeEditorCallback([this]() {
     ToggleChallengeEditor();
   });
+  simple_settings_dialog_->SetLoadAchievementsCallback([this]() {
+    if (achievement_manager_) {
+      return achievement_manager_->GetAchievementData();
+    }
+    return rex::ui::SimpleAchievementData{};
+  });
+  simple_settings_dialog_->SetResetAchievementsCallback([this]() {
+    if (achievement_manager_) {
+      achievement_manager_->ResetAchievements();
+    }
+  });
+  simple_settings_dialog_->SetResetFilteredAchievementsCallback(
+      [this](const std::vector<uint32_t>& ids) {
+        if (achievement_manager_) {
+          achievement_manager_->ResetAchievements(ids);
+        }
+      });
+  simple_settings_dialog_->SetAchievementIconCallback([this](uint32_t id) -> void* {
+    if (achievement_manager_) {
+      return achievement_manager_->GetAchievementIcon(id);
+    }
+    return nullptr;
+  });
   ApplySettingsCursorMode();
   skate3::native_scene::SetSettingsMenuBlur(true);
-  simple_settings_dialog_->Show();
+  simple_settings_dialog_->Show(initial_category);
+}
+
+void Skate3BaseApp::OpenAchievementsMenu() {
+  ToggleSimpleSettings(3);
 }
 
 void Skate3BaseApp::ToggleNativeDebug() {

@@ -1691,6 +1691,10 @@ bool GetLastSkaterPosition(float out_pos[3]) {
   if (!out_pos) {
     return false;
   }
+  uint32_t dummy_ent = 0;
+  if (PickPlayer(out_pos, &dummy_ent, uint64_t(2) * 1000 * 1000 * 1000)) {
+    return true;
+  }
   std::lock_guard<std::mutex> lock(g_mu);
   if (g_last_pos_ns == 0) {
     return false;
