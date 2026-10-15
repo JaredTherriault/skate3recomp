@@ -241,7 +241,9 @@ include(cmake/CodegenTargets.cmake)
 
 set(SKATE3_COMMON_SOURCES
     src/exception_compat.cpp
+    src/skate3_achievements.cpp
     src/skate3_app_common.cpp
+    src/skate3_cheats.cpp
     src/skate3_demo_path.cpp
     src/skate3_loc_dump.cpp
     src/sub_8290C2A8_shim.cpp
@@ -400,3 +402,37 @@ if(MSVC)
 else()
     target_compile_options(skate3 PRIVATE -finput-charset=UTF-8 -fexec-charset=UTF-8)
 endif()
+
+add_executable(skate3_achievement_tests
+    tests/test_achievements.cpp
+    src/skate3_achievements.cpp
+)
+target_include_directories(skate3_achievement_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}/include
+    ${REXSDK_DIR}/thirdparty/imgui
+)
+target_link_libraries(skate3_achievement_tests PRIVATE rex::runtime)
+add_dependencies(skate3_achievement_tests skate3_stage_runtime_library)
+if(UNIX AND NOT APPLE)
+    target_link_options(skate3_achievement_tests PRIVATE "-Wl,-rpath,$ORIGIN")
+endif()
+add_dependencies(skate3 skate3_achievement_tests)
+
+add_executable(skate3_cheat_tests
+    tests/test_cheats.cpp
+    src/skate3_cheats.cpp
+)
+target_include_directories(skate3_cheat_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}/include
+    ${REXSDK_DIR}/thirdparty/imgui
+)
+target_link_libraries(skate3_cheat_tests PRIVATE rex::runtime)
+if(UNIX AND NOT APPLE)
+    target_link_options(skate3_cheat_tests PRIVATE "-Wl,-rpath,$ORIGIN")
+endif()
+
+
