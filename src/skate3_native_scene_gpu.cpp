@@ -36,12 +36,14 @@
 #include <rex/graphics/native_guest_renderer.h>
 #include <rex/kernel/guest_presence.h>
 #include <rex/logging.h>
+#include <SDL3/SDL.h>
 
 #include "native/skate3_native_diag.h"
 #include "native/skate3_native_entity.h"
 #include "native/skate3_native_guest_read.h"
 #include "native/skate3_native_lw.h"
 #include "native/skate3_native_palette.h"
+#include "skate3_achievements.h"
 // Offline-compiled SPIR-V for the native shaders (compiled from the HLSL
 // sources with DXC): the Vulkan RHI backend consumes these blobs; the D3D12
 // backend runtime-compiles the embedded HLSL as before.
@@ -6525,6 +6527,8 @@ struct CustomCharState {
   nrhi::Device* device = nullptr;
   std::string loaded_path;
   std::filesystem::file_time_type loaded_mtime{};
+  uint64_t loaded_mtime_hash = 0;
+  uint32_t mtime_check_counter = 0;
   bool loaded = false;
   nrhi::Buffer* vb = nullptr;
   nrhi::Buffer* ib = nullptr;
@@ -6544,9 +6548,208 @@ struct CustomCharState {
   bool ever_had_char_rows = false;
   std::unordered_set<const DrawItem*> suppressed;
   std::unordered_map<uint32_t, MeshBoneMap> mesh_map_cache;
+
+  // Identity lock for local player character replacement
+  uint32_t tracked_player_entity = 0;
+  float tracked_player_hips[3] = {};
+  bool has_tracked_player = false;
+  uint32_t tracked_player_lost_frames = 0;
 };
 
 CustomCharState g_custom_char;
+
+uint64_t ComputeCustomCharMtimeHash(const std::filesystem::path& resolved) {
+  std::error_code ec;
+  uint64_t h = 14695981039346656037ull;
+  auto mix_time = [&](const std::filesystem::path& p, uint64_t tag) {
+    if (std::filesystem::exists(p, ec)) {
+      const auto t = std::filesystem::last_write_time(p, ec).time_since_epoch().count();
+      h ^= uint64_t(t) + tag + (h << 6) + (h >> 2);
+      h *= 1099511628211ull;
+    }
+  };
+  mix_time(resolved, 1);
+  const std::filesystem::path dir = resolved.parent_path();
+  const std::string stem = resolved.stem().string();
+  mix_time(dir / "atlas.png", 2);
+  mix_time(dir / (stem + "_atlas.png"), 3);
+  mix_time(dir / "eyes.png", 4);
+  mix_time(dir / (stem + "_eyes.png"), 5);
+  for (int s = 0; s < 4; ++s) {
+    const std::string s_num = std::to_string(s);
+    mix_time(dir / ("slice_" + s_num + ".png"), uint64_t(10 + s * 2));
+    mix_time(dir / (stem + "_slice_" + s_num + ".png"), uint64_t(11 + s * 2));
+  }
+  return h;
+}
+
+bool BlitPngIntoAtlasRect(const std::filesystem::path& png_path,
+                          uint8_t* atlas_rgba, uint32_t atlas_w, uint32_t atlas_h,
+                          uint32_t dst_x, uint32_t dst_y,
+                          uint32_t dst_w, uint32_t dst_h) {
+  SDL_Surface* raw_surf = SDL_LoadPNG(png_path.string().c_str());
+  if (!raw_surf) {
+    REXLOG_WARN("native-scene: failed to load PNG override '{}': {}",
+                png_path.string(), SDL_GetError());
+    return false;
+  }
+  SDL_Surface* surf = SDL_ConvertSurface(raw_surf, SDL_PIXELFORMAT_RGBA32);
+  SDL_DestroySurface(raw_surf);
+  if (!surf || surf->w <= 0 || surf->h <= 0 || !surf->pixels) {
+    if (surf) SDL_DestroySurface(surf);
+    return false;
+  }
+
+  const uint32_t sw = uint32_t(surf->w);
+  const uint32_t sh = uint32_t(surf->h);
+  const uint32_t spitch = uint32_t(surf->pitch);
+  const uint8_t* spixels = static_cast<const uint8_t*>(surf->pixels);
+
+  // Detect whether the PNG has custom non-255 alpha (specular/roughness in Skate 3)
+  // or if it was saved as a standard opaque RGB image (all alpha == 255), in which
+  // case we preserve the embedded atlas's tuned specular alpha channel.
+  bool has_custom_alpha = false;
+  for (uint32_t y = 0; y < sh && !has_custom_alpha; ++y) {
+    const uint8_t* row = spixels + size_t(y) * spitch;
+    for (uint32_t x = 0; x < sw; ++x) {
+      if (row[x * 4 + 3] != 255u) {
+        has_custom_alpha = true;
+        break;
+      }
+    }
+  }
+
+  for (uint32_t y = 0; y < dst_h; ++y) {
+    if (dst_y + y >= atlas_h) break;
+    const float v = (float(y) + 0.5f) / float(dst_h) * float(sh) - 0.5f;
+    const int y0 = std::clamp(int(std::floor(v)), 0, int(sh) - 1);
+    const int y1 = std::clamp(y0 + 1, 0, int(sh) - 1);
+    const float fy = std::clamp(v - float(y0), 0.0f, 1.0f);
+
+    for (uint32_t x = 0; x < dst_w; ++x) {
+      if (dst_x + x >= atlas_w) break;
+      uint8_t* dst = atlas_rgba + (size_t(dst_y + y) * atlas_w + (dst_x + x)) * 4;
+      if (sw == dst_w && sh == dst_h) {
+        const uint8_t* src = spixels + size_t(y) * spitch + size_t(x) * 4;
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        if (has_custom_alpha) dst[3] = src[3];
+      } else {
+        const float u = (float(x) + 0.5f) / float(dst_w) * float(sw) - 0.5f;
+        const int x0 = std::clamp(int(std::floor(u)), 0, int(sw) - 1);
+        const int x1 = std::clamp(x0 + 1, 0, int(sw) - 1);
+        const float fx = std::clamp(u - float(x0), 0.0f, 1.0f);
+
+        const uint8_t* p00 = spixels + size_t(y0) * spitch + size_t(x0) * 4;
+        const uint8_t* p10 = spixels + size_t(y0) * spitch + size_t(x1) * 4;
+        const uint8_t* p01 = spixels + size_t(y1) * spitch + size_t(x0) * 4;
+        const uint8_t* p11 = spixels + size_t(y1) * spitch + size_t(x1) * 4;
+        for (int c = 0; c < (has_custom_alpha ? 4 : 3); ++c) {
+          const float top = float(p00[c]) * (1.0f - fx) + float(p10[c]) * fx;
+          const float bot = float(p01[c]) * (1.0f - fx) + float(p11[c]) * fx;
+          const float val = top * (1.0f - fy) + bot * fy;
+          dst[c] = uint8_t(std::clamp(int(val + 0.5f), 0, 255));
+        }
+      }
+    }
+  }
+
+  SDL_DestroySurface(surf);
+  return true;
+}
+
+void ApplyCustomCharTextureOverrides(const std::filesystem::path& resolved,
+                                     uint8_t* atlas_rgba,
+                                     uint32_t tex_w, uint32_t tex_h) {
+  std::error_code ec;
+  const std::filesystem::path dir = resolved.parent_path();
+  const std::string stem = resolved.stem().string();
+  const uint32_t half_w = tex_w / 2;
+  const uint32_t half_h = tex_h / 2;
+
+  // Save the embedded 128x128 (half_w/8 x half_h/8) eyeball patch in Slice 1
+  // (located at x = [half_w .. half_w + eye_w), y = [eye_y .. eye_y + eye_h))
+  // so replacing slice_1.png with a raw Frostbite boots texture where that cell
+  // is empty black doesn't erase the character's eyes.
+  const uint32_t eye_w = std::max(1u, half_w / 8);
+  const uint32_t eye_h = std::max(1u, half_h / 8);
+  const uint32_t eye_x = half_w;
+  const uint32_t eye_y = eye_h;
+  std::vector<uint8_t> saved_eye_patch(size_t(eye_w) * eye_h * 4);
+  for (uint32_t y = 0; y < eye_h; ++y) {
+    std::memcpy(saved_eye_patch.data() + size_t(y) * eye_w * 4,
+                atlas_rgba + (size_t(eye_y + y) * tex_w + eye_x) * 4,
+                size_t(eye_w) * 4);
+  }
+
+  auto find_override = [&](const std::string& name1,
+                           const std::string& name2) -> std::filesystem::path {
+    std::filesystem::path p1 = dir / name1;
+    if (std::filesystem::exists(p1, ec)) return p1;
+    std::filesystem::path p2 = dir / name2;
+    if (std::filesystem::exists(p2, ec)) return p2;
+    return {};
+  };
+
+  const auto atlas_override = find_override("atlas.png", stem + "_atlas.png");
+  if (!atlas_override.empty()) {
+    if (BlitPngIntoAtlasRect(atlas_override, atlas_rgba, tex_w, tex_h, 0, 0,
+                             tex_w, tex_h)) {
+      REXLOG_INFO("native-scene: applied custom char atlas override '{}'",
+                  atlas_override.string());
+    }
+  }
+
+  bool slice1_overridden = false;
+  for (int s = 0; s < 4; ++s) {
+    const std::string s_num = std::to_string(s);
+    const auto slice_path = find_override("slice_" + s_num + ".png",
+                                          stem + "_slice_" + s_num + ".png");
+    if (!slice_path.empty()) {
+      const uint32_t qx = uint32_t(s % 2) * half_w;
+      const uint32_t qy = uint32_t(s / 2) * half_h;
+      if (BlitPngIntoAtlasRect(slice_path, atlas_rgba, tex_w, tex_h, qx, qy,
+                               half_w, half_h)) {
+        if (s == 1) slice1_overridden = true;
+        REXLOG_INFO("native-scene: applied custom char slice_{} override '{}'",
+                    s, slice_path.string());
+      }
+    }
+  }
+
+  // If slice_1.png was overridden and its eye cell is still blank/black, restore
+  // the embedded eyeball patch.
+  if (slice1_overridden) {
+    bool eye_cell_blank = true;
+    for (uint32_t y = eye_h / 4; y < (eye_h * 3) / 4 && eye_cell_blank; ++y) {
+      for (uint32_t x = eye_w / 4; x < (eye_w * 3) / 4; ++x) {
+        const uint8_t* p = atlas_rgba + (size_t(eye_y + y) * tex_w + (eye_x + x)) * 4;
+        if (p[0] > 12u || p[1] > 12u || p[2] > 12u) {
+          eye_cell_blank = false;
+          break;
+        }
+      }
+    }
+    if (eye_cell_blank) {
+      for (uint32_t y = 0; y < eye_h; ++y) {
+        std::memcpy(atlas_rgba + (size_t(eye_y + y) * tex_w + eye_x) * 4,
+                    saved_eye_patch.data() + size_t(y) * eye_w * 4,
+                    size_t(eye_w) * 4);
+      }
+    }
+  }
+
+  // Optional eyes.png override for the 128x128 eyeball patch
+  const auto eyes_override = find_override("eyes.png", stem + "_eyes.png");
+  if (!eyes_override.empty()) {
+    if (BlitPngIntoAtlasRect(eyes_override, atlas_rgba, tex_w, tex_h, eye_x,
+                             eye_y, eye_w, eye_h)) {
+      REXLOG_INFO("native-scene: applied custom char eyes override '{}'",
+                  eyes_override.string());
+    }
+  }
+}
 
 void DestroyCustomCharResources() {
   if (g_custom_char.device != nullptr) {
@@ -6589,11 +6792,17 @@ bool EnsureCustomCharacter(const NativeGuestOutputRenderContext& context) {
       return false;
     }
   }
-  const auto mtime = std::filesystem::last_write_time(resolved, ec);
-  if (g_custom_char.loaded && g_custom_char.loaded_path == resolved.string() &&
-      g_custom_char.loaded_mtime == mtime) {
-    return true;
+  if (g_custom_char.loaded && g_custom_char.loaded_path == resolved.string()) {
+    if ((++g_custom_char.mtime_check_counter % 60u) != 0u) {
+      return true;
+    }
+    const uint64_t cur_hash = ComputeCustomCharMtimeHash(resolved);
+    if (g_custom_char.loaded_mtime_hash == cur_hash) {
+      return true;
+    }
   }
+  const auto mtime = std::filesystem::last_write_time(resolved, ec);
+  const uint64_t mtime_hash = ComputeCustomCharMtimeHash(resolved);
 
   std::ifstream in(resolved, std::ios::binary);
   if (!in) {
@@ -6631,6 +6840,10 @@ bool EnsureCustomCharacter(const NativeGuestOutputRenderContext& context) {
                 resolved.string());
     return false;
   }
+
+  // Apply optional runtime PNG overrides (slice_0.png .. slice_3.png, eyes.png, atlas.png)
+  // from the same directory as the character .bin file.
+  ApplyCustomCharTextureOverrides(resolved, tex_data.data(), hdr.tex_w, hdr.tex_h);
 
   DestroyCustomCharResources();
 
@@ -6746,6 +6959,7 @@ bool EnsureCustomCharacter(const NativeGuestOutputRenderContext& context) {
   std::memcpy(g_custom_char.bbox_max, hdr.bbox_max, sizeof(hdr.bbox_max));
   g_custom_char.loaded_path = resolved.string();
   g_custom_char.loaded_mtime = mtime;
+  g_custom_char.loaded_mtime_hash = mtime_hash;
   g_custom_char.loaded = true;
   REXLOG_INFO(
       "native-scene: loaded custom character '{}' ({} verts, {} indices, {}x{})",
@@ -7105,48 +7319,100 @@ void PrepareCustomCharFrame(const NativeGuestOutputRenderContext& context,
     }
   }
 
+  // Retrieve authoritative local human player position from game physics/HUD
+  float local_phys_pos[3] = {};
+  const bool have_local_phys = skate3::GetActiveLocalSkaterPosition(local_phys_pos);
+
   // Pick the player skater group:
-  // Prioritize groups with CAS / UBT parts (and not ambient Colorized peds)
-  // that are within camera range, then pick the closest to scene.cam_pos.
+  // Priority tiers:
+  // Tier 4: Exact entity match with our tracked player entity from recent frames
+  // Tier 3: Strong proximity match (< 3.0m) to authoritative local skater physics position
+  // Tier 2: CAS skater (has_cac && !is_colorized) within 25m of camera
+  // Tier 1: Non-colorized UBT skater within 25m of camera
+  // Tier 0: Any skater
   SkaterGroup* best = nullptr;
   int best_tier = -1;
-  float best_d2 = 1e30f;
+  float best_score = 1e30f;
+
   for (SkaterGroup& g : groups) {
     if (g.unique_bones < 8 || !g.has_hips) continue;
-    const float dx = g.hips_world[0] - scene.cam_pos[0];
-    const float dy = g.hips_world[1] - scene.cam_pos[1];
-    const float dz = g.hips_world[2] - scene.cam_pos[2];
-    const float d2 = dx * dx + dy * dy + dz * dz;
-    // Tier 2: CAS skater within 25m of camera
-    // Tier 1: Non-colorized UBT skater within 25m of camera
-    // Tier 0: Any skater
+
+    const float dx_cam = g.hips_world[0] - scene.cam_pos[0];
+    const float dy_cam = g.hips_world[1] - scene.cam_pos[1];
+    const float dz_cam = g.hips_world[2] - scene.cam_pos[2];
+    const float d2_cam = dx_cam * dx_cam + dy_cam * dy_cam + dz_cam * dz_cam;
+
     int tier = 0;
-    if (d2 < 625.0f) {
+    float score = d2_cam;
+
+    // Check tracked entity match
+    if (g_custom_char.has_tracked_player && g.entity != 0 &&
+        g.entity == g_custom_char.tracked_player_entity) {
+      tier = 4;
+      const float dx_tr = g.hips_world[0] - g_custom_char.tracked_player_hips[0];
+      const float dy_tr = g.hips_world[1] - g_custom_char.tracked_player_hips[1];
+      const float dz_tr = g.hips_world[2] - g_custom_char.tracked_player_hips[2];
+      score = dx_tr * dx_tr + dy_tr * dy_tr + dz_tr * dz_tr;
+    } else if (have_local_phys) {
+      const float dx_ph = g.hips_world[0] - local_phys_pos[0];
+      const float dy_ph = g.hips_world[1] - local_phys_pos[1];
+      const float dz_ph = g.hips_world[2] - local_phys_pos[2];
+      const float d2_ph = dx_ph * dx_ph + dy_ph * dy_ph + dz_ph * dz_ph;
+      if (d2_ph < 9.0f) {  // Within 3m of true local player physics
+        tier = 3;
+        score = d2_ph;
+      }
+    }
+
+    if (tier < 3 && d2_cam < 625.0f) {
       if (g.has_cac && !g.is_colorized) {
         tier = 2;
       } else if (g.has_ubt && !g.is_colorized) {
         tier = 1;
       }
     }
+
     if (best == nullptr || tier > best_tier ||
-        (tier == best_tier && d2 < best_d2)) {
+        (tier == best_tier && score < best_score)) {
       best = &g;
       best_tier = tier;
-      best_d2 = d2;
+      best_score = score;
     }
   }
+
   if (best == nullptr) {
+    if (g_custom_char.has_tracked_player) {
+      if (++g_custom_char.tracked_player_lost_frames > 60u) {
+        g_custom_char.has_tracked_player = false;
+        g_custom_char.tracked_player_entity = 0;
+      }
+    }
     return;
   }
+
+  // Update tracked local player identity and hips anchor
+  if (best->entity != 0) {
+    g_custom_char.tracked_player_entity = best->entity;
+  }
+  std::memcpy(g_custom_char.tracked_player_hips, best->hips_world, 3 * sizeof(float));
+  g_custom_char.has_tracked_player = true;
+  g_custom_char.tracked_player_lost_frames = 0;
+
+  // Merge subordinate/accessory draw items belonging strictly to the selected player
   for (SkaterGroup& g : groups) {
     if (&g == best || g.unique_bones > 0) continue;
-    bool merge = (best->entity != 0 && g.entity == best->entity) ||
-                 (best->has_cac && g.has_cac && !g.is_colorized);
-    if (!merge && g.has_hips) {
+    // An item belongs to this player if entity matches, or if it has matching hips location
+    // and is NOT an AI ped (never merge colorized ambient peds)
+    bool merge = false;
+    if (best->entity != 0 && g.entity != 0) {
+      merge = (g.entity == best->entity);
+    } else if (best->has_cac && g.has_cac && !g.is_colorized && best->entity == g.entity) {
+      merge = true;
+    } else if (!g.is_colorized && g.has_hips && (g.entity == 0 || g.entity == best->entity)) {
       const float dx = g.hips_world[0] - best->hips_world[0];
       const float dy = g.hips_world[1] - best->hips_world[1];
       const float dz = g.hips_world[2] - best->hips_world[2];
-      if (dx * dx + dy * dy + dz * dz < 1.44f) {
+      if (dx * dx + dy * dy + dz * dz < 0.25f) {
         merge = true;
       }
     }
