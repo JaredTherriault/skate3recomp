@@ -1490,30 +1490,61 @@ def patch_reskate_mod_directory(
     if not cas_p.exists():
         raise FileNotFoundError(f"Missing cas_01.cas in {mod_dir}")
 
-    cas_sample = cas_p.read_bytes()
+    # Dynamically auto-detect template parameters by reading decompressed item EBX slice
+    old_slug_str = None
+    old_disp_str = None
+    old_uuid_str = None
 
-    # Dynamically auto-detect template parameters from cas_01.cas
-    m_mesh = re.search(rb"characters/maincharacters/reskate/([0-9a-fA-F-]{36})_mesh", cas_sample)
-    if m_mesh:
-        old_uuid_str = m_mesh.group(1).decode("latin1")
-    else:
+    toc_sample_p = mod_dir / "Win32" / "items.toc"
+    if toc_sample_p.exists():
+        bundles_sample, _ = parse_toc_bundles_and_chunks(toc_sample_p.read_bytes())
+        for b in bundles_sample:
+            files, man = parse_bundle_region_and_manifest(b["region"], cas_p)
+            if not man:
+                continue
+            for i, e in enumerate(man["ebx"]):
+                fi = files[1 + i]
+                if not fi["patch"]:
+                    continue
+                if e["name"].startswith("items/cust_fullbodycostume/own_"):
+                    raw = read_cas_slice(cas_p, fi["offset"], fi["size"])
+                    m_slug = re.search(rb"items/cust_fullbodycostume/own(?:_own)?_([a-zA-Z0-9_]+)\x00", raw)
+                    m_disp = re.search(rb"(Own(?:_Own)?_[a-zA-Z0-9_]+)\x00", raw)
+                    m_uuid = re.search(rb"([0-9a-fA-F-]{36})_dmpreset", raw)
+                    if not m_uuid:
+                        m_uuid = re.search(rb"([0-9a-fA-F-]{36})", raw)
+                    if m_slug:
+                        old_slug_str = m_slug.group(1).decode("latin1")
+                    if m_disp:
+                        old_disp_str = m_disp.group(1).decode("latin1")
+                    if m_uuid:
+                        old_uuid_str = m_uuid.group(1).decode("latin1")
+                    if old_slug_str and old_disp_str and old_uuid_str:
+                        break
+            if old_slug_str and old_disp_str and old_uuid_str:
+                break
+        if not old_uuid_str:
+            for b in bundles_sample:
+                files, man = parse_bundle_region_and_manifest(b["region"], cas_p)
+                if not man:
+                    continue
+                for r in man.get("resources", []):
+                    m_res = re.search(r"characters/maincharacters/reskate/([0-9a-fA-F-]{36})_mesh", r["name"])
+                    if m_res:
+                        old_uuid_str = m_res.group(1)
+                        break
+                if old_uuid_str:
+                    break
+
+    if not old_uuid_str:
         old_uuid_str = "97083fc0-36cf-4786-bac8-26fd407c7237"
-    old_uuid_b = old_uuid_str.encode("latin1")
-
-    m_item = re.search(rb"items/cust_fullbodycostume/own_own_([a-zA-Z0-9_]+)", cas_sample)
-    if not m_item:
-        m_item = re.search(rb"items/cust_fullbodycostume/own_([a-zA-Z0-9_]+)", cas_sample)
-    if m_item:
-        old_slug_str = m_item.group(1).decode("latin1")
-    else:
+    if not old_slug_str:
         old_slug_str = "yorha2b"
-    old_slug_b = old_slug_str.encode("latin1")
+    if not old_disp_str:
+        old_disp_str = "Own_YoRHa2B"
 
-    old_disp_str = "Own_YoRHa2B"
-    if m_item:
-        m_disp = re.search(rb"(Own_[a-zA-Z0-9_]+)\x00", cas_sample[m_item.start():m_item.start() + 200])
-        if m_disp:
-            old_disp_str = m_disp.group(1).decode("latin1")
+    old_uuid_b = old_uuid_str.encode("latin1")
+    old_slug_b = old_slug_str.encode("latin1")
     old_disp_b = old_disp_str.encode("latin1")
 
     lod_guid_map: dict[str, bytes] = {}
@@ -1527,11 +1558,10 @@ def patch_reskate_mod_directory(
             new_slug_str = (clean + "_" * len(old_slug_str))[:len(old_slug_str)].lower()
         new_slug_b = new_slug_str.encode("latin1")
 
-        disp_prefix = f"Own_Own_{clean}" if old_disp_str.startswith("Own_Own_") else f"Own_{clean}"
-        if len(disp_prefix) >= len(old_disp_str):
-            new_disp_str = disp_prefix[:len(old_disp_str)]
-        else:
-            new_disp_str = (disp_prefix + "_" * len(old_disp_str))[:len(old_disp_str)]
+        disp_prefix = "Own_Own_" if old_disp_str.startswith("Own_Own_") else "Own_"
+        remain_len = len(old_disp_str) - len(disp_prefix)
+        disp_body = (clean + "_" * remain_len)[:remain_len]
+        new_disp_str = f"{disp_prefix}{disp_body}"
         new_disp_b = new_disp_str.encode("latin1")
 
         new_uuid_str = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reskate.costume.{new_slug_str}"))
