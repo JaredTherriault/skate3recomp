@@ -1,0 +1,199 @@
+{
+  "achievements": [
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Own any challenge or spot in the city.",
+      "gamerscore": 60,
+      "id": "sample_own_spot",
+      "name": "First on the Board",
+      "spot": "any",
+      "trigger": "own_spot"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Kill any challenge or spot in the city.",
+      "gamerscore": 60,
+      "id": "sample_kill_spot",
+      "name": "Taking It to the Limit",
+      "spot": "any",
+      "trigger": "kill_spot"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Cruise up to the upper University overlook north of Chan Center.",
+      "gamerscore": 50,
+      "id": "sample_reach_location",
+      "name": "Campus Sightseer",
+      "position": [
+        370.69,
+        79.94,
+        -112.83
+      ],
+      "radius": 8.0,
+      "trigger": "reach_location"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Clear the University stair set from the upper Chan Center platform to the lower courtyard.",
+      "gamerscore": 50,
+      "id": "sample_gap",
+      "landing": [
+        423.0,
+        69.4,
+        -252.0
+      ],
+      "name": "The Stairway Flight",
+      "radius": 3.8,
+      "takeoff": [
+        414.0,
+        73.3,
+        -256.0
+      ],
+      "trigger": "gap"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Hit 30 mph cruising down any hill.",
+      "gamerscore": 50,
+      "id": "sample_speed",
+      "name": "Breeze on the Boulevard",
+      "threshold": 30.0,
+      "trigger": "speed"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Catch 1.5 seconds of clean air time.",
+      "gamerscore": 50,
+      "id": "sample_air_time",
+      "name": "Hang Time",
+      "threshold": 1.5,
+      "trigger": "air_time"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Maintain a continuous 15-meter grind.",
+      "gamerscore": 60,
+      "id": "sample_grind_distance",
+      "name": "Curb Cruiser",
+      "threshold": 15.0,
+      "trigger": "grind_distance"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Hold a manual across 15 meters of flat ground.",
+      "gamerscore": 60,
+      "id": "sample_manual_distance",
+      "name": "Steady Wheels",
+      "threshold": 15.0,
+      "trigger": "manual_distance"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Bank a trickline worth at least 2,500 points.",
+      "gamerscore": 60,
+      "id": "sample_line_score",
+      "name": "Building Momentum",
+      "threshold": 2500.0,
+      "trigger": "line_score"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Chain 4 tricks together in a single line.",
+      "gamerscore": 60,
+      "id": "sample_tricks_chained",
+      "name": "Combo Starter",
+      "threshold": 4.0,
+      "trigger": "tricks_chained"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Land a clean 360 Flip on flat ground.",
+      "gamerscore": 50,
+      "id": "sample_trick_name",
+      "name": "Three-Sixty Twist",
+      "target": "360 Flip",
+      "trigger": "trick_name"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Break 2 or more bones in a single bail.",
+      "gamerscore": 50,
+      "id": "sample_bones_broken",
+      "name": "Minor Fracture",
+      "threshold": 2.0,
+      "trigger": "bones_broken"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Incorporate 1 moveable object into a trick sequence.",
+      "gamerscore": 50,
+      "id": "sample_moveable_objects",
+      "name": "Prop Improviser",
+      "threshold": 1.0,
+      "trigger": "moveable_objects"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Sell 10,000 career skateboards.",
+      "gamerscore": 60,
+      "id": "sample_board_sales",
+      "name": "On the Map",
+      "threshold": 10000.0,
+      "trigger": "board_sales"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Enter any secret code in the Extras menu.",
+      "gamerscore": 30,
+      "id": "sample_cheat_code",
+      "name": "Open Sesame",
+      "target": "any",
+      "trigger": "cheat_code"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Land one of every core flip trick in the game.",
+      "gamerscore": 50,
+      "group": "flips",
+      "id": "sample_flip_master",
+      "name": "Flip Trick Encyclopedia",
+      "trigger": "trick_group"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Land one of every core grind and slide in the game.",
+      "gamerscore": 50,
+      "group": "grinds",
+      "id": "sample_grind_master",
+      "name": "Grind & Slide Connoisseur",
+      "trigger": "trick_group"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Land one of every core grab and air trick in the game.",
+      "gamerscore": 50,
+      "group": "grabs",
+      "id": "sample_grab_master",
+      "name": "Airtime Acrobat",
+      "trigger": "trick_group"
+    },
+    {
+      "category": "Sample Achievement Mod",
+      "description": "Land every manual, plant, and footwork variation.",
+      "gamerscore": 50,
+      "group": "other",
+      "id": "sample_other_master",
+      "name": "Street Specialist",
+      "trigger": "trick_group"
+    }
+  ],
+  "author": "Skate 3 Recomp Community",
+  "category": "Sample Achievement Mod",
+  "description": "Sample mod demonstrating declarative achievement triggers and trick group checklists for modders.",
+  "enabled": true,
+  "hot_reload": true,
+  "id": "sample_achievement_mod",
+  "name": "Sample Achievement Mod",
+  "spots": [],
+  "version": "1.1.0"
+}

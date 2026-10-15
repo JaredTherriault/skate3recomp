@@ -1,31 +1,31 @@
 {
-  "id": "san_van_party_skate_mod",
-  "name": "Skate Mod - San Van Party",
-  "version": "1.0.0",
   "author": "Skate 3 Recomp Community",
   "description": "Custom Own-The-Spot challenge in San Van Party Pack (Art Gallery).",
   "enabled": true,
+  "id": "san_van_party_skate_mod",
+  "name": "Skate Mod - San Van Party",
   "spots": [
     {
-      "key": "regs_to_riches",
-      "title": "Regs to Riches",
-      "district": "artgallery",
       "desc": "Turn this courtyard funbox into high art to own the gallery.",
+      "district": "artgallery",
+      "key": "regs_to_riches",
+      "runway": 9.6,
+      "scores": {
+        "kill": 1000,
+        "own": 650
+      },
       "site": [
         129.15,
         43.89,
-        -34.80
+        -34.8
       ],
       "start": [
         122.22,
         42.82,
         -41.51
       ],
-      "runway": 9.6,
-      "scores": {
-        "own": 650,
-        "kill": 1000
-      }
+      "title": "Regs to Riches"
     }
-  ]
+  ],
+  "version": "1.0.0"
 }

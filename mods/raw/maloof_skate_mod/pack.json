@@ -1,16 +1,19 @@
 {
-  "id": "maloof_skate_mod",
-  "name": "Skate Mod - Maloof NYC",
-  "version": "1.0.0",
   "author": "Skate 3 Recomp Community",
   "description": "Custom Own-The-Spot challenge in Maloof Money Cup 2010 NYC.",
   "enabled": true,
+  "id": "maloof_skate_mod",
+  "name": "Skate Mod - Maloof NYC",
   "spots": [
     {
-      "key": "nine_to_five",
-      "title": "Nine to Five",
-      "district": "maloof",
       "desc": "Clock in down the 9-stair hubba and rail to cash your paycheck in Queens.",
+      "district": "maloof",
+      "key": "nine_to_five",
+      "runway": 17.7,
+      "scores": {
+        "kill": 1150,
+        "own": 750
+      },
       "site": [
         -0.25,
         5.43,
@@ -21,11 +24,8 @@
         4.33,
         38.0
       ],
-      "runway": 17.7,
-      "scores": {
-        "own": 750,
-        "kill": 1150
-      }
+      "title": "Nine to Five"
     }
-  ]
+  ],
+  "version": "1.0.0"
 }

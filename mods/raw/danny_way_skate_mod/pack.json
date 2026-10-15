@@ -1,31 +1,31 @@
 {
-  "id": "danny_way_skate_mod",
-  "name": "Skate Mod - Danny Way",
-  "version": "1.0.0",
   "author": "Skate 3 Recomp Community",
   "description": "Custom Own-The-Spot challenge in Danny Way's Hawaiian Dream compound.",
   "enabled": true,
+  "id": "danny_way_skate_mod",
+  "name": "Skate Mod - Danny Way",
   "spots": [
     {
-      "key": "bridge_over_tranquil_water",
-      "title": "Bridge Over Tranquil Water",
-      "district": "dannyway",
       "desc": "Keep your balance and stay dry over the river canal to own this slice of paradise.",
+      "district": "dannyway",
+      "key": "bridge_over_tranquil_water",
+      "runway": 16.6,
+      "scores": {
+        "kill": 1000,
+        "own": 650
+      },
       "site": [
         173.63,
         -20.43,
         2.57
       ],
       "start": [
-        157.00,
+        157.0,
         -20.15,
         2.57
       ],
-      "runway": 16.6,
-      "scores": {
-        "own": 650,
-        "kill": 1000
-      }
+      "title": "Bridge Over Tranquil Water"
     }
-  ]
+  ],
+  "version": "1.0.0"
 }
