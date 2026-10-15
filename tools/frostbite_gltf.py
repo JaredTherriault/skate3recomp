@@ -1015,7 +1015,11 @@ def pack_frostbite_meshset(
             s7 = ts4.tobytes()
         vb_blob = s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7
         ib_blob = local_tris.astype("<u2").tobytes()
-        return v_cnt, len(local_tris), vb_blob, ib_blob
+        bmin_s = pos[u_verts].min(axis=0).astype(np.float32)
+        bmax_s = pos[u_verts].max(axis=0).astype(np.float32)
+        center_s = (bmin_s + bmax_s) * 0.5
+        rad_s = float(np.max(np.linalg.norm(pos[u_verts] - center_s, axis=1)))
+        return v_cnt, len(local_tris), vb_blob, ib_blob, (rad_s, bmin_s, bmax_s)
 
     res = bytearray(template_res_bytes)
     bmin = pos.min(axis=0).astype(np.float32)
@@ -1031,27 +1035,34 @@ def pack_frostbite_meshset(
     cur_v_off = 0
     cur_start_idx = 0
     sec_records = []
+    sec_bounds = {}
 
     nsec0, _ = struct.unpack_from("<IQ", res, 0x00D0 + 0x18)
     for s in range(nsec0):
         if s == 1:
-            v_cnt, prim_cnt, vb_b, ib_b = build_subset_streams(sub1_tris)
+            v_cnt, prim_cnt, vb_b, ib_b, bounds = build_subset_streams(sub1_tris)
+            sec_bounds[s] = bounds
         elif s == 5:
-            v_cnt, prim_cnt, vb_b, ib_b = build_subset_streams(sub5_tris)
+            v_cnt, prim_cnt, vb_b, ib_b, bounds = build_subset_streams(sub5_tris)
+            sec_bounds[s] = bounds
         else:
             v_cnt, prim_cnt, vb_b, ib_b = 3, 1, bytes(dummy_vb), dummy_ib
 
-        pad_v = (16 - (cur_v_off % 16)) % 16
-        if pad_v:
-            vb_parts.append(b"\x00" * pad_v)
-            cur_v_off += pad_v
-
+        # Frostbite vertex buffers are strictly contiguous (SoA streams 56B/vert) without inter-section padding,
+        # ensuring v_off remains an exact integer multiple of vertex stride (56) required by the GPU and DingoMorphMemory.
         sec_records.append((prim_cnt, cur_start_idx, cur_v_off, v_cnt))
         vb_parts.append(vb_b)
         cur_v_off += len(vb_b)
 
         ib_parts.append(ib_b)
         cur_start_idx += prim_cnt * 3
+
+        # Frostbite MeshSet requires 4-index (8-byte) alignment for each section's start_idx.
+        # Pad with dummy 16-bit indices so the next section begins on an 8-byte boundary.
+        pad_i = (4 - (cur_start_idx % 4)) % 4
+        if pad_i:
+            ib_parts.append(b"\x00\x00" * pad_i)
+            cur_start_idx += pad_i
 
     pad_vb_end = (16 - (cur_v_off % 16)) % 16
     if pad_vb_end:
@@ -1078,6 +1089,15 @@ def pack_frostbite_meshset(
         for s, (prim_cnt, start_idx, v_off, v_cnt) in enumerate(sec_records):
             sb = sec_off + s * 0x180
             struct.pack_into("<4I", res, sb + 0x30, prim_cnt, start_idx, v_off, v_cnt)
+            # CRITICAL: Frostbite DingoMorphMemory reads secondary stream offsets at sb+0x64 and sb+0x150!
+            # Mismatches here cause memcpy access violations (0xc0000005) in DingoMorphMemory.
+            struct.pack_into("<I", res, sb + 0x64, v_off)
+            struct.pack_into("<I", res, sb + 0x150, start_idx)
+            if s in sec_bounds:
+                rad_s, bmin_s, bmax_s = sec_bounds[s]
+                struct.pack_into("<f", res, sb + 0x15c, rad_s)
+                struct.pack_into("<3f", res, sb + 0x160, float(bmin_s[0]), float(bmin_s[1]), float(bmin_s[2]))
+                struct.pack_into("<3f", res, sb + 0x170, float(bmax_s[0]), float(bmax_s[1]), float(bmax_s[2]))
         struct.pack_into("<II", res, lb + 0x68, ib_sz, vb_sz)
 
     chunk_out = vb_all + ib_all
