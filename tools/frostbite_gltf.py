@@ -1020,8 +1020,8 @@ def pack_frostbite_meshset(
     res = bytearray(template_res_bytes)
     bmin = pos.min(axis=0).astype(np.float32)
     bmax = pos.max(axis=0).astype(np.float32)
-    struct.pack_into("<3f", res, 0x60, float(bmin[0]), float(bmin[1]), float(bmin[2]))
-    struct.pack_into("<3f", res, 0x70, float(bmax[0]), float(bmax[1]), float(bmax[2]))
+    struct.pack_into("<3f", res, 0x10, float(bmin[0]), float(bmin[1]), float(bmin[2]))
+    struct.pack_into("<3f", res, 0x20, float(bmax[0]), float(bmax[1]), float(bmax[2]))
 
     dummy_vb = bytearray(3 * 56)
     dummy_ib = struct.pack("<3H", 0, 1, 2)
