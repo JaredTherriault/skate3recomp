@@ -369,20 +369,20 @@ int main() {
     PPCContext ctx{};
 
     const uint32_t skater = 0x40000000u;
-    const uint32_t telemetry = 0x40010000u;
-    StoreU32(base, skater + 60u, telemetry);
+    const uint32_t skater_tracker = 0x40010000u;
+    StoreU32(base, skater + 60u, skater_tracker);
 
     // 7 (Trick Spammer: 30,000 line), 8 (Blaow!: 10,000 trick), 10 (Objectifier: 3 objects),
     // 12 (Mantastic Voyage: 3 manuals), 111 (Chain Reaction: 10 tricks chained)
-    StoreU8(base, telemetry + 14640u, 0);  // not bailed
-    StoreU8(base, telemetry + 14636u, 0);  // not in seq
-    StoreU8(base, telemetry + 14626u, 1);  // seq_banked = true
-    StoreU32(base, telemetry + 108u, 12000u);  // trick_score = 12,000
-    StoreU32(base, telemetry + 0u, 35000u);    // line_score = 35,000
-    StoreU32(base, telemetry + 84u, 11u);      // banked_tricks = 11
-    StoreU32(base, telemetry + 88u, 0u);
-    StoreU32(base, telemetry + 112u, 3u);      // manuals_chained = 3
-    StoreU8(base, telemetry + 5758u, 3u);      // moveable_objects = 3
+    StoreU8(base, skater_tracker + 14640u, 0);  // not bailed
+    StoreU8(base, skater_tracker + 14636u, 0);  // not in seq
+    StoreU8(base, skater_tracker + 14626u, 1);  // seq_banked = true
+    StoreU32(base, skater_tracker + 108u, 12000u);  // trick_score = 12,000
+    StoreU32(base, skater_tracker + 0u, 35000u);    // line_score = 35,000
+    StoreU32(base, skater_tracker + 84u, 11u);      // banked_tricks = 11
+    StoreU32(base, skater_tracker + 88u, 0u);
+    StoreU32(base, skater_tracker + 112u, 3u);      // manuals_chained = 3
+    StoreU8(base, skater_tracker + 5758u, 3u);      // moveable_objects = 3
 
     ctx.r4.u32 = skater;
     sub_827743A0(ctx, base);
@@ -394,9 +394,9 @@ int main() {
     TEST_CHECK(mgr.IsUnlocked(111), "#111 Chain Reaction (10 tricks chained) should unlock");
 
     // 9 (Did Somebody Get a Boo Boo?: 75,000 bail) & 108 (Full Body Cast: 6 bones broken)
-    StoreU8(base, telemetry + 14647u, 1);  // HoM active
-    StoreU32(base, telemetry + 12336u + 1196u, 80000u);  // bail_score = 80,000
-    StoreU32(base, telemetry + 12336u + 904u, 7u);       // bones_broken = 7
+    StoreU8(base, skater_tracker + 14647u, 1);  // HoM active
+    StoreU32(base, skater_tracker + 12336u + 1196u, 80000u);  // bail_score = 80,000
+    StoreU32(base, skater_tracker + 12336u + 904u, 7u);       // bones_broken = 7
     ctx.r4.u32 = skater;
     sub_82774828(ctx, base);
     TEST_CHECK(mgr.IsUnlocked(9), "#9 Did Somebody Get a Boo Boo? (75k bail) should unlock");
@@ -409,8 +409,8 @@ int main() {
     sub_82DA93D8(ctx, base);
     TEST_CHECK(mgr.IsUnlocked(11), "#11 Extreme Grindage (100m grind) should unlock");
 
-    // 13 (Don't be so Mayo: Miracle Whip via sub_82773D98 with trick_id=252 and telemetry+9844 != 0)
-    StoreU32(base, telemetry + 9844u, 1u);
+    // 13 (Don't be so Mayo: Miracle Whip via sub_82773D98 with trick_id=252 and skater_tracker+9844 != 0)
+    StoreU32(base, skater_tracker + 9844u, 1u);
     ctx.r3.s32 = 252;
     ctx.r4.u32 = 0;  // failed = false
     ctx.r5.u32 = skater;
@@ -598,12 +598,12 @@ int main() {
     TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
                "sample_gap must NOT unlock by rolling on the ground down the stairs");
 
-    // Negative test 2: start grind, but stay on ground in the middle of the stairs (> 0.6s grace)
+    // Negative test 2: start grind, but stay on ground in the middle of the stairs (> 2.0s grace)
     SetSkaterStateGrind(415.0f, 69.0f, -210.0f, true, false);
     mgr.Update(0.05f);
     SetSkaterState(280.0f, 67.0f, -195.0f, false, false);  // touched ground in the middle!
     mgr.Update(0.05f);
-    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2100));
     mgr.Update(0.05f);
     SetSkaterStateGrind(145.0f, 65.0f, -181.0f, true, false);
     mgr.Update(0.05f);
@@ -662,16 +662,16 @@ int main() {
 
     // 5.7: sample_line_score (2500), sample_tricks_chained (4), sample_moveable_objects (1)
     const uint32_t skater = 0x400D0000u;
-    const uint32_t telemetry = 0x400E0000u;
-    StoreU32(base, skater + 60u, telemetry);
-    StoreU8(base, telemetry + 14640u, 0);
-    StoreU8(base, telemetry + 14636u, 0);
-    StoreU8(base, telemetry + 14626u, 1);  // banked
-    StoreU32(base, telemetry + 108u, 1000u);
-    StoreU32(base, telemetry + 0u, 2600u);  // line_score = 2600
-    StoreU32(base, telemetry + 84u, 4u);    // 4 tricks chained
-    StoreU32(base, telemetry + 88u, 0u);
-    StoreU8(base, telemetry + 5758u, 1u);   // 1 moveable object
+    const uint32_t skater_tracker = 0x400E0000u;
+    StoreU32(base, skater + 60u, skater_tracker);
+    StoreU8(base, skater_tracker + 14640u, 0);
+    StoreU8(base, skater_tracker + 14636u, 0);
+    StoreU8(base, skater_tracker + 14626u, 1);  // banked
+    StoreU32(base, skater_tracker + 108u, 1000u);
+    StoreU32(base, skater_tracker + 0u, 2600u);  // line_score = 2600
+    StoreU32(base, skater_tracker + 84u, 4u);    // 4 tricks chained
+    StoreU32(base, skater_tracker + 88u, 0u);
+    StoreU8(base, skater_tracker + 5758u, 1u);   // 1 moveable object
     ctx.r3.u32 = 0;
     ctx.r4.u32 = skater;
     sub_827743A0(ctx, base);
@@ -684,18 +684,19 @@ int main() {
 
     // 5.8: sample_trick_name ("Three-Sixty Twist" - single flatground 360 Flip via sub_82774080)
     // Simulate a single trick in queue without in_seq/seq_banked
-    StoreU8(base, telemetry + 14626u, 0);
-    StoreU32(base, telemetry + 1032u, 1u);       // 1 trick in queue
-    StoreU32(base, telemetry + 1032u + 20u, 13u); // trick_id 13 = "360Flip"
-    StoreU8(base, telemetry + 1032u + 20u + 178u, 0u);  // complete
+    StoreU8(base, skater_tracker + 14626u, 0);
+    StoreU32(base, skater_tracker + 1032u, 1u);       // 1 trick in queue
+    StoreU32(base, skater_tracker + 1032u + 20u, 13u); // trick_id 13 = "360Flip"
+    StoreU8(base, skater_tracker + 1032u + 20u + 178u, 0u);  // complete
     ctx.r4.u32 = skater;
     sub_82774080(ctx, base);
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_trick_name"),
                "sample_trick_name (Three-Sixty Twist) should unlock on single flatground 360Flip");
 
     // 5.9: sample_bones_broken ("Minor Fracture" - 2 bones)
-    StoreU8(base, telemetry + 14647u, 1);
-    StoreU32(base, telemetry + 12336u + 904u, 2u);
+    StoreU8(base, skater_tracker + 14647u, 1);
+    StoreU32(base, skater_tracker + 12336u + 896u, 2u);
+    StoreU32(base, skater_tracker + 12336u + 904u, 1u);
     ctx.r4.u32 = skater;
     sub_82774828(ctx, base);
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_bones_broken"),
@@ -826,10 +827,28 @@ int main() {
                "sample_grind_master (Grind & Slide Connoisseur) should unlock at 16/16 grinds");
 
     // 6.3: Airtime Acrobat (14 grabs & airs)
+    // Verify raw in-game table tokens for grab tweaks map correctly
+    const auto mapped_method = skate3::MapToCanonicalTricks("bsgrab_down");
+    TEST_CHECK(std::find(mapped_method.begin(), mapped_method.end(), "Method") != mapped_method.end(),
+               "bsgrab_down must map to Method");
+    const auto mapped_cross = skate3::MapToCanonicalTricks("fsgrab_left");
+    TEST_CHECK(std::find(mapped_cross.begin(), mapped_cross.end(), "Cross Bone") != mapped_cross.end(),
+               "fsgrab_left must map to Cross Bone");
+    TEST_CHECK(std::find(mapped_cross.begin(), mapped_cross.end(), "Nosebone") == mapped_cross.end(),
+               "fsgrab_left must NOT map to Nosebone");
+    const auto mapped_nosebone = skate3::MapToCanonicalTricks("fsgrab_up");
+    TEST_CHECK(std::find(mapped_nosebone.begin(), mapped_nosebone.end(), "Nosebone") != mapped_nosebone.end(),
+               "fsgrab_up must map to Nosebone");
+    TEST_CHECK(std::find(mapped_nosebone.begin(), mapped_nosebone.end(), "Cross Bone") == mapped_nosebone.end(),
+               "fsgrab_up must NOT map to Cross Bone");
+    const auto mapped_beni = skate3::MapToCanonicalTricks("tailgrab_onefoot_behind");
+    TEST_CHECK(std::find(mapped_beni.begin(), mapped_beni.end(), "Benihana") != mapped_beni.end(),
+               "tailgrab_onefoot_behind must map to Benihana");
+
     const std::vector<std::string> all_grabs = {
-        "FS Indy", "BS Melon", "FS Mute", "BS Stalefish", "Tailgrab",
-        "Nosegrab", "FS Method", "Seatbelt", "Rocket Air", "Christ Air",
-        "Superdude", "BS Benihanna", "FS Airwalk", "Cross Bone",
+        "fsgrab", "bsgrab", "mutegrab", "stalegrab", "tailgrab",
+        "nosegrab", "bsgrab_down", "seatbeltgrab", "rocketair", "christ_air",
+        "superman", "tailgrab_onefoot_behind", "tailgrab_airwalk", "fsgrab_left",
     };
     for (size_t i = 0; i < all_grabs.size(); ++i) {
       TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_grab_master"),

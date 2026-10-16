@@ -95,6 +95,11 @@ for obj in list(bpy.data.objects):
             for kb in obj.data.shape_keys.key_blocks[1:]:
                 if kb.value < 0.01:
                     kb.value = 1.0
+            bpy.context.view_layer.objects.active = obj
+            obj.shape_key_add(name="BakedMix", from_mix=True)
+            while len(obj.data.shape_keys.key_blocks) > 1:
+                obj.shape_key_remove(obj.data.shape_keys.key_blocks[0])
+            obj.shape_key_remove(obj.data.shape_keys.key_blocks[0])
 
 bpy.ops.export_scene.gltf(
     filepath=out_glb,

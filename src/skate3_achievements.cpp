@@ -314,18 +314,30 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
   }
   if ((n.find("nosegrab") != std::string::npos || n.find("nose") != std::string::npos) &&
       n.find("manual") == std::string::npos && n.find("slide") == std::string::npos &&
-      n.find("grind") == std::string::npos && n.find("blunt") == std::string::npos) {
+      n.find("grind") == std::string::npos && n.find("blunt") == std::string::npos &&
+      n.find("bone") == std::string::npos) {
     add("Nosegrab");
   }
   if (n.find("method") != std::string::npos || n.find("methodair") != std::string::npos ||
-      (n.find("method") != std::string::npos && n.find("air") != std::string::npos)) {
+      (n.find("method") != std::string::npos && n.find("air") != std::string::npos) ||
+      (n.find("bsgrab") != std::string::npos &&
+       (n.find("down") != std::string::npos || n.find("left") != std::string::npos ||
+        n.find("right") != std::string::npos || n.find("up") != std::string::npos))) {
     add("Method");
   }
   if (n.find("seatbelt") != std::string::npos || n.find("seat") != std::string::npos) {
     add("Seatbelt");
   }
-  if (n.find("crossbone") != std::string::npos ||
-      (n.find("cross") != std::string::npos && n.find("bone") != std::string::npos)) {
+  if (n.find("nosebone") != std::string::npos ||
+      (n.find("fsgrab") != std::string::npos && n.find("up") != std::string::npos)) {
+    add("Nosebone");
+  }
+  if ((n.find("crossbone") != std::string::npos ||
+       (n.find("cross") != std::string::npos && n.find("bone") != std::string::npos) ||
+       (n.find("fsgrab") != std::string::npos &&
+        (n.find("left") != std::string::npos || n.find("right") != std::string::npos ||
+         n.find("down") != std::string::npos))) &&
+      n.find("nose") == std::string::npos && n.find("up") == std::string::npos) {
     add("Cross Bone");
   }
   if (n.find("rocket") != std::string::npos) {
@@ -339,7 +351,13 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
     add("Superdude");
   }
   if (n.find("benihana") != std::string::npos || n.find("benihanna") != std::string::npos ||
-      n.find("beni") != std::string::npos) {
+      n.find("beni") != std::string::npos ||
+      (n.find("tailgrab") != std::string::npos &&
+       (n.find("onefoot") != std::string::npos || n.find("behind") != std::string::npos ||
+        n.find("front") != std::string::npos ||
+        n.find("left") != std::string::npos || n.find("right") != std::string::npos)) ||
+      (n.find("onefoot") != std::string::npos &&
+       (n.find("behind") != std::string::npos || n.find("back") != std::string::npos))) {
     add("Benihana");
     add("Benihanna");
   }
@@ -784,8 +802,12 @@ void AchievementToastDialog::Clear() {
 }
 
 bool AchievementToastDialog::WantsContinuousRepaint() const {
-  std::lock_guard lock(mutex_);
-  if (is_active_ || !queue_.empty() || is_progress_active_ || !progress_queue_.empty()) {
+  bool active = false;
+  {
+    std::lock_guard lock(mutex_);
+    active = (is_active_ || !queue_.empty() || is_progress_active_ || !progress_queue_.empty());
+  }
+  if (active) {
     return true;
   }
   if (manager_ && manager_->HasActiveTelemetryTriggers()) {
@@ -799,367 +821,380 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
     manager_->Update(io.DeltaTime);
   }
 
-  std::lock_guard lock(mutex_);
   const auto now = std::chrono::steady_clock::now();
-  const float s = std::clamp(io.DisplaySize.y / 1080.0f, 0.6f, 2.5f);
-  ImDrawList* dl = ImGui::GetForegroundDrawList();
-  if (!dl) {
-    return;
-  }
-  ImFont* bold = imgui_drawer()->ui_font_semibold() ? imgui_drawer()->ui_font_semibold() : ImGui::GetFont();
-  ImFont* reg = imgui_drawer()->ui_font() ? imgui_drawer()->ui_font() : ImGui::GetFont();
 
-  // ============================================================================
-  // 1. Full Achievement Unlock Toast (bottom-center, ~4 seconds)
-  // ============================================================================
-  if (is_active_ || !queue_.empty()) {
-    if (!is_active_ && !queue_.empty()) {
-      is_active_ = true;
-      current_ = queue_.front();
-      queue_.pop_front();
-      start_time_ = now;
-      PlayUnlockSound();
-    }
-
-    constexpr float kEnterDuration = 0.4f;
-    constexpr float kHoldDuration = 4.0f;
-    constexpr float kExitDuration = 0.6f;
-    constexpr float kTotalDuration = kEnterDuration + kHoldDuration + kExitDuration;
-
-    float elapsed = std::chrono::duration<float>(now - start_time_).count();
-    if (elapsed >= kTotalDuration) {
-      if (!queue_.empty()) {
-        current_ = queue_.front();
-        queue_.pop_front();
-        start_time_ = now;
-        elapsed = 0.0f;
-        PlayUnlockSound();
-      } else {
-        is_active_ = false;
-        current_.reset();
-      }
-    }
-
-    if (current_) {
-
+  std::optional<AchievementToastItem> draw_toast;
   float alpha = 1.0f;
   float y_offset = 0.0f;
 
-  if (elapsed < kEnterDuration) {
-    const float t = elapsed / kEnterDuration;
-    const float e = 1.0f - std::pow(1.0f - t, 3.0f);
-    alpha = std::clamp(t * 1.5f, 0.0f, 1.0f);
-    y_offset = (1.0f - e) * 50.0f;
-  } else if (elapsed > kEnterDuration + kHoldDuration) {
-    const float t = (elapsed - (kEnterDuration + kHoldDuration)) / kExitDuration;
-    const float e = t * t;
-    alpha = std::clamp(1.0f - t, 0.0f, 1.0f);
-    y_offset = e * 35.0f;
-  }
+  std::optional<AchievementProgressToastItem> draw_prog;
+  float p_alpha = 1.0f;
+  float p_x_offset_raw = 0.0f;
 
-  ImDrawList* dl = ImGui::GetForegroundDrawList();
-  if (!dl) {
-    return;
-  }
+  {
+    std::lock_guard lock(mutex_);
 
-  const float s = std::clamp(io.DisplaySize.y / 1080.0f, 0.6f, 2.5f);
+    // 1. Full Achievement Unlock Toast (bottom-center, ~4 seconds)
+    if (is_active_ || !queue_.empty()) {
+      if (!is_active_ && !queue_.empty()) {
+        is_active_ = true;
+        current_ = queue_.front();
+        queue_.pop_front();
+        start_time_ = now;
+        PlayUnlockSound();
+      }
 
-  ImFont* bold = imgui_drawer()->ui_font_semibold() ? imgui_drawer()->ui_font_semibold() : ImGui::GetFont();
-  ImFont* reg = imgui_drawer()->ui_font() ? imgui_drawer()->ui_font() : ImGui::GetFont();
+      constexpr float kEnterDuration = 0.4f;
+      constexpr float kHoldDuration = 4.0f;
+      constexpr float kExitDuration = 0.6f;
+      constexpr float kTotalDuration = kEnterDuration + kHoldDuration + kExitDuration;
 
-  const float card_w = 480.0f * s;
-  const float card_x0 = (io.DisplaySize.x - card_w) * 0.5f;
-  const float card_x1 = card_x0 + card_w;
-
-  // Gamerscore badge (+XX G) metrics on far right
-  const std::string score_str = fmt::format("+{} G", current_->gamerscore);
-  const float pill_font_size = 15.0f * s;
-  const ImVec2 score_extent = bold->CalcTextSizeA(pill_font_size, FLT_MAX, 0.0f, score_str.c_str());
-  const float pill_pad_x = 10.0f * s;
-  const float pill_w = score_extent.x + pill_pad_x * 2.0f;
-  const float pill_h = 24.0f * s;
-  const float pill_x1 = card_x1 - 16.0f * s;
-  const float pill_x0 = pill_x1 - pill_w;
-
-  const float text_x0 = card_x0 + 72.0f * s;
-  const float text_max_w = std::max(80.0f * s, pill_x0 - text_x0 - 12.0f * s);
-
-  // Word-wrap description into up to 2 lines
-  const float desc_size = 13.5f * s;
-  std::string desc_line1;
-  std::string desc_line2;
-  if (!current_->description.empty()) {
-    if (reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, current_->description.c_str()).x <= text_max_w) {
-      desc_line1 = current_->description;
-    } else {
-      size_t split_pos = std::string::npos;
-      for (size_t i = 0; i < current_->description.size(); ++i) {
-        if (current_->description[i] == ' ') {
-          std::string prefix = current_->description.substr(0, i);
-          if (reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, prefix.c_str()).x <= text_max_w) {
-            split_pos = i;
-          } else {
-            break;
-          }
+      float elapsed = std::chrono::duration<float>(now - start_time_).count();
+      if (elapsed >= kTotalDuration) {
+        if (!queue_.empty()) {
+          current_ = queue_.front();
+          queue_.pop_front();
+          start_time_ = now;
+          elapsed = 0.0f;
+          PlayUnlockSound();
+        } else {
+          is_active_ = false;
+          current_.reset();
         }
       }
-      if (split_pos != std::string::npos) {
-        desc_line1 = current_->description.substr(0, split_pos);
-        desc_line2 = current_->description.substr(split_pos + 1);
-      } else {
-        desc_line1 = current_->description;
-        while (!desc_line1.empty() &&
-               reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, desc_line1.c_str()).x > text_max_w) {
-          desc_line1.pop_back();
+
+      if (current_) {
+        draw_toast = current_;
+        if (elapsed < kEnterDuration) {
+          const float t = elapsed / kEnterDuration;
+          const float e = 1.0f - std::pow(1.0f - t, 3.0f);
+          alpha = std::clamp(t * 1.5f, 0.0f, 1.0f);
+          y_offset = (1.0f - e) * 50.0f;
+        } else if (elapsed > kEnterDuration + kHoldDuration) {
+          const float t = (elapsed - (kEnterDuration + kHoldDuration)) / kExitDuration;
+          const float e = t * t;
+          alpha = std::clamp(1.0f - t, 0.0f, 1.0f);
+          y_offset = e * 35.0f;
         }
-        desc_line2 = current_->description.substr(desc_line1.size());
-      }
-      if (reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, desc_line2.c_str()).x > text_max_w) {
-        while (!desc_line2.empty() &&
-               reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, (desc_line2 + "...").c_str()).x > text_max_w) {
-          desc_line2.pop_back();
-        }
-        desc_line2 += "...";
       }
     }
-  }
 
-  const float card_h = (!desc_line2.empty() ? 104.0f : (!desc_line1.empty() ? 88.0f : 76.0f)) * s;
-  const float base_y1 = io.DisplaySize.y - 65.0f * s;
-  const float card_y1 = base_y1 + y_offset * s;
-  const float card_y0 = card_y1 - card_h;
-  const float corner_radius = 8.0f * s;
-
-  const ImU32 bg_col = IM_COL32(10, 14, 16, static_cast<int>(238 * alpha));
-  const ImU32 border_col = IM_COL32(213, 235, 10, static_cast<int>(220 * alpha));
-  const ImU32 shadow_col = IM_COL32(0, 0, 0, static_cast<int>(140 * alpha));
-
-  // Drop shadow
-  dl->AddRectFilled(ImVec2(card_x0 - 2.0f * s, card_y0 + 4.0f * s),
-                    ImVec2(card_x1 + 2.0f * s, card_y1 + 6.0f * s),
-                    shadow_col, corner_radius + 2.0f * s);
-
-  // Card background & border
-  dl->AddRectFilled(ImVec2(card_x0, card_y0), ImVec2(card_x1, card_y1),
-                    bg_col, corner_radius);
-  dl->AddRect(ImVec2(card_x0, card_y0), ImVec2(card_x1, card_y1),
-              border_col, corner_radius, 0, 1.5f * s);
-
-  const float badge_cx = card_x0 + 39.0f * s;
-  const float badge_cy = (card_y0 + card_y1) * 0.5f;
-
-  // Left icon or Gamerscore badge
-  void* icon_tex = manager_ ? manager_->GetAchievementIcon(current_->id) : nullptr;
-  if (icon_tex) {
-    const float icon_sz = 48.0f * s;
-    const float icon_x0 = card_x0 + 15.0f * s;
-    const float icon_y0 = badge_cy - icon_sz * 0.5f;
-    const float icon_x1 = icon_x0 + icon_sz;
-    const float icon_y1 = icon_y0 + icon_sz;
-    const float icon_radius = 6.0f * s;
-
-    dl->AddImageRounded(reinterpret_cast<ImTextureID>(icon_tex),
-                        ImVec2(icon_x0, icon_y0), ImVec2(icon_x1, icon_y1),
-                        ImVec2(0, 0), ImVec2(1, 1),
-                        IM_COL32(255, 255, 255, static_cast<int>(255 * alpha)),
-                        icon_radius);
-    dl->AddRect(ImVec2(icon_x0, icon_y0), ImVec2(icon_x1, icon_y1),
-                border_col, icon_radius, 0, 1.5f * s);
-  } else {
-    // Circular Xbox Gamerscore fallback badge on left
-    const float badge_r = 22.0f * s;
-
-    dl->AddCircleFilled(ImVec2(badge_cx, badge_cy), badge_r,
-                        IM_COL32(16, 50, 46, static_cast<int>(255 * alpha)), 32);
-    dl->AddCircle(ImVec2(badge_cx, badge_cy), badge_r,
-                  border_col, 32, 2.0f * s);
-
-    const float g_size = 20.0f * s;
-    const char* g_str = "G";
-    const ImVec2 g_extent = bold->CalcTextSizeA(g_size, FLT_MAX, 0.0f, g_str);
-    dl->AddText(bold, g_size,
-                ImVec2(badge_cx - g_extent.x * 0.5f, badge_cy - g_extent.y * 0.5f),
-                IM_COL32(255, 255, 255, static_cast<int>(255 * alpha)), g_str);
-  }
-
-  // Gamerscore badge (+XX G) on far right
-  const float pill_y0 = badge_cy - pill_h * 0.5f;
-  const float pill_y1 = badge_cy + pill_h * 0.5f;
-
-  dl->AddRectFilled(ImVec2(pill_x0, pill_y0), ImVec2(pill_x1, pill_y1),
-                    IM_COL32(213, 235, 10, static_cast<int>(40 * alpha)), 6.0f * s);
-  dl->AddRect(ImVec2(pill_x0, pill_y0), ImVec2(pill_x1, pill_y1),
-              IM_COL32(213, 235, 10, static_cast<int>(120 * alpha)), 6.0f * s, 0, 1.0f * s);
-  dl->AddText(bold, pill_font_size,
-              ImVec2(pill_x0 + pill_pad_x, pill_y0 + (pill_h - score_extent.y) * 0.5f),
-              IM_COL32(213, 235, 10, static_cast<int>(255 * alpha)), score_str.c_str());
-
-  // Header: "ACHIEVEMENT UNLOCKED"
-  const char* header_str = "ACHIEVEMENT UNLOCKED";
-  const float header_size = 12.0f * s;
-  dl->AddText(bold, header_size,
-              ImVec2(text_x0, card_y0 + 11.0f * s),
-              IM_COL32(213, 235, 10, static_cast<int>(255 * alpha)), header_str);
-
-  // Title:
-  const float title_size = 17.5f * s;
-  std::string truncated_title = current_->name;
-  if (bold->CalcTextSizeA(title_size, FLT_MAX, 0.0f, truncated_title.c_str()).x > text_max_w) {
-    while (!truncated_title.empty() &&
-           bold->CalcTextSizeA(title_size, FLT_MAX, 0.0f, (truncated_title + "...").c_str()).x > text_max_w) {
-      truncated_title.pop_back();
-    }
-    truncated_title += "...";
-  }
-  dl->AddText(bold, title_size,
-              ImVec2(text_x0, card_y0 + 27.0f * s),
-              IM_COL32(250, 252, 252, static_cast<int>(255 * alpha)), truncated_title.c_str());
-
-  // Description:
-  const ImU32 desc_col = IM_COL32(195, 206, 210, static_cast<int>(245 * alpha));
-  if (!desc_line1.empty()) {
-    dl->AddText(reg, desc_size,
-                ImVec2(text_x0, card_y0 + 50.0f * s),
-                desc_col, desc_line1.c_str());
-  }
-  if (!desc_line2.empty()) {
-    dl->AddText(reg, desc_size,
-                ImVec2(text_x0, card_y0 + 67.0f * s),
-                desc_col, desc_line2.c_str());
-  }
-}
-}
-
-  // ============================================================================
-  // 2. Fractional Progress Toast on the Side of the Screen (~2 seconds)
-  // ============================================================================
-  if (is_progress_active_ || !progress_queue_.empty()) {
-    if (!is_progress_active_ && !progress_queue_.empty()) {
-      is_progress_active_ = true;
-      current_progress_ = progress_queue_.front();
-      progress_queue_.pop_front();
-      progress_start_time_ = now;
-      PlayProgressSound();
-    }
-
-    constexpr float kProgEnter = 0.20f;
-    constexpr float kProgHold = 2.00f;
-    constexpr float kProgExit = 0.30f;
-    constexpr float kProgTotal = kProgEnter + kProgHold + kProgExit;
-
-    const float p_elapsed = std::chrono::duration<float>(now - progress_start_time_).count();
-    if (p_elapsed >= kProgTotal) {
-      if (!progress_queue_.empty()) {
+    // 2. Fractional Progress Toast on the Side of the Screen (~2 seconds)
+    if (is_progress_active_ || !progress_queue_.empty()) {
+      if (!is_progress_active_ && !progress_queue_.empty()) {
+        is_progress_active_ = true;
         current_progress_ = progress_queue_.front();
         progress_queue_.pop_front();
         progress_start_time_ = now;
         PlayProgressSound();
-      } else {
-        is_progress_active_ = false;
-        current_progress_.reset();
-      }
-    } else if (current_progress_) {
-      float p_alpha = 1.0f;
-      float p_x_offset = 0.0f;
-
-      if (p_elapsed < kProgEnter) {
-        const float t = p_elapsed / kProgEnter;
-        const float e = 1.0f - std::pow(1.0f - t, 3.0f);
-        p_alpha = std::clamp(t * 1.5f, 0.0f, 1.0f);
-        p_x_offset = (1.0f - e) * 60.0f * s;  // slide in from right edge
-      } else if (p_elapsed > kProgEnter + kProgHold) {
-        const float t = (p_elapsed - (kProgEnter + kProgHold)) / kProgExit;
-        const float e = t * t;
-        p_alpha = std::clamp(1.0f - t, 0.0f, 1.0f);
-        p_x_offset = e * 60.0f * s;            // slide out to right
       }
 
-      const float p_card_w = 320.0f * s;
-      const float p_card_h = 74.0f * s;
-      const float p_card_x1 = io.DisplaySize.x - 24.0f * s + p_x_offset;
-      const float p_card_x0 = p_card_x1 - p_card_w;
-      const float p_card_y0 = io.DisplaySize.y * 0.44f - p_card_h * 0.5f;
-      const float p_card_y1 = p_card_y0 + p_card_h;
-      const float p_radius = 8.0f * s;
+      constexpr float kProgEnter = 0.20f;
+      constexpr float kProgHold = 2.00f;
+      constexpr float kProgExit = 0.30f;
+      constexpr float kProgTotal = kProgEnter + kProgHold + kProgExit;
 
-      const ImU32 p_bg_col = IM_COL32(10, 14, 16, static_cast<int>(238 * p_alpha));
-      const ImU32 p_border_col = IM_COL32(213, 235, 10, static_cast<int>(220 * p_alpha));
-      const ImU32 p_shadow_col = IM_COL32(0, 0, 0, static_cast<int>(140 * p_alpha));
-
-      // Drop shadow
-      dl->AddRectFilled(ImVec2(p_card_x0 - 2.0f * s, p_card_y0 + 3.0f * s),
-                        ImVec2(p_card_x1 + 2.0f * s, p_card_y1 + 5.0f * s),
-                        p_shadow_col, p_radius + 2.0f * s);
-
-      // Card background & border
-      dl->AddRectFilled(ImVec2(p_card_x0, p_card_y0), ImVec2(p_card_x1, p_card_y1),
-                        p_bg_col, p_radius);
-      dl->AddRect(ImVec2(p_card_x0, p_card_y0), ImVec2(p_card_x1, p_card_y1),
-                  p_border_col, p_radius, 0, 1.5f * s);
-
-      // Icon on left (if available)
-      void* p_icon_tex = manager_ ? manager_->GetAchievementIcon(current_progress_->achievement_id) : nullptr;
-      float p_text_x0 = p_card_x0 + 16.0f * s;
-      if (p_icon_tex) {
-        const float p_icon_sz = 40.0f * s;
-        const float p_icon_x0 = p_card_x0 + 12.0f * s;
-        const float p_icon_y0 = (p_card_y0 + p_card_y1) * 0.5f - p_icon_sz * 0.5f;
-        dl->AddImageRounded(reinterpret_cast<ImTextureID>(p_icon_tex),
-                            ImVec2(p_icon_x0, p_icon_y0),
-                            ImVec2(p_icon_x0 + p_icon_sz, p_icon_y0 + p_icon_sz),
-                            ImVec2(0, 0), ImVec2(1, 1),
-                            IM_COL32(255, 255, 255, static_cast<int>(255 * p_alpha)),
-                            6.0f * s);
-        dl->AddRect(ImVec2(p_icon_x0, p_icon_y0),
-                    ImVec2(p_icon_x0 + p_icon_sz, p_icon_y0 + p_icon_sz),
-                    p_border_col, 6.0f * s, 0, 1.0f * s);
-        p_text_x0 = p_icon_x0 + p_icon_sz + 12.0f * s;
-      }
-      const float p_text_x1 = p_card_x1 - 16.0f * s;
-
-      // Line 1: Item name (left) + fraction count (right)
-      const float item_font_sz = 14.0f * s;
-      const std::string count_str = fmt::format("{} / {}", current_progress_->current_count, current_progress_->total_count);
-      const ImVec2 count_extent = bold->CalcTextSizeA(item_font_sz, FLT_MAX, 0.0f, count_str.c_str());
-      const float count_x0 = p_text_x1 - count_extent.x;
-
-      dl->AddText(bold, item_font_sz,
-                  ImVec2(count_x0, p_card_y0 + 10.0f * s),
-                  IM_COL32(213, 235, 10, static_cast<int>(255 * p_alpha)), count_str.c_str());
-
-      std::string trunc_item = current_progress_->item_name;
-      const float max_item_w = std::max(40.0f * s, count_x0 - p_text_x0 - 8.0f * s);
-      while (!trunc_item.empty() && bold->CalcTextSizeA(item_font_sz, FLT_MAX, 0.0f, trunc_item.c_str()).x > max_item_w) {
-        trunc_item.pop_back();
-      }
-      dl->AddText(bold, item_font_sz,
-                  ImVec2(p_text_x0, p_card_y0 + 10.0f * s),
-                  IM_COL32(250, 252, 252, static_cast<int>(255 * p_alpha)), trunc_item.c_str());
-
-      // Line 2: Progress bar
-      const float bar_y0 = p_card_y0 + 32.0f * s;
-      const float bar_y1 = bar_y0 + 6.0f * s;
-      const float bar_w = p_text_x1 - p_text_x0;
-      const float frac = current_progress_->total_count > 0
-                             ? std::clamp(static_cast<float>(current_progress_->current_count) /
-                                              static_cast<float>(current_progress_->total_count),
-                                          0.0f, 1.0f)
-                             : 0.0f;
-      // Track
-      dl->AddRectFilled(ImVec2(p_text_x0, bar_y0), ImVec2(p_text_x1, bar_y1),
-                        IM_COL32(32, 40, 44, static_cast<int>(220 * p_alpha)), 3.0f * s);
-      // Fill
-      if (frac > 0.0f) {
-        dl->AddRectFilled(ImVec2(p_text_x0, bar_y0), ImVec2(p_text_x0 + bar_w * frac, bar_y1),
-                          IM_COL32(213, 235, 10, static_cast<int>(255 * p_alpha)), 3.0f * s);
+      float p_elapsed = std::chrono::duration<float>(now - progress_start_time_).count();
+      if (p_elapsed >= kProgTotal) {
+        if (!progress_queue_.empty()) {
+          current_progress_ = progress_queue_.front();
+          progress_queue_.pop_front();
+          progress_start_time_ = now;
+          p_elapsed = 0.0f;
+          PlayProgressSound();
+        } else {
+          is_progress_active_ = false;
+          current_progress_.reset();
+        }
       }
 
-      // Line 3: Parent achievement name
-      const float parent_font_sz = 12.0f * s;
-      dl->AddText(reg, parent_font_sz,
-                  ImVec2(p_text_x0, p_card_y0 + 46.0f * s),
-                  IM_COL32(180, 190, 195, static_cast<int>(235 * p_alpha)), current_progress_->parent_name.c_str());
+      if (current_progress_) {
+        draw_prog = current_progress_;
+        if (p_elapsed < kProgEnter) {
+          const float t = p_elapsed / kProgEnter;
+          const float e = 1.0f - std::pow(1.0f - t, 3.0f);
+          p_alpha = std::clamp(t * 1.5f, 0.0f, 1.0f);
+          p_x_offset_raw = (1.0f - e) * 60.0f;
+        } else if (p_elapsed > kProgEnter + kProgHold) {
+          const float t = (p_elapsed - (kProgEnter + kProgHold)) / kProgExit;
+          const float e = t * t;
+          p_alpha = std::clamp(1.0f - t, 0.0f, 1.0f);
+          p_x_offset_raw = e * 60.0f;
+        }
+      }
     }
+  } // mutex_ released before drawing and before calling AchievementManager
+
+  if (!draw_toast && !draw_prog) {
+    return;
+  }
+
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  if (!dl) {
+    return;
+  }
+
+  const float s = std::clamp(io.DisplaySize.y / 1080.0f, 0.6f, 2.5f);
+  ImFont* bold = (imgui_drawer() && imgui_drawer()->ui_font_semibold()) ? imgui_drawer()->ui_font_semibold() : ImGui::GetFont();
+  ImFont* reg = (imgui_drawer() && imgui_drawer()->ui_font()) ? imgui_drawer()->ui_font() : ImGui::GetFont();
+  if (!bold) bold = reg ? reg : ImGui::GetFont();
+  if (!reg) reg = bold ? bold : ImGui::GetFont();
+  if (!bold || !reg) {
+    return;
+  }
+
+  // Draw full unlock toast
+  if (draw_toast) {
+    const float card_w = 480.0f * s;
+    const float card_x0 = (io.DisplaySize.x - card_w) * 0.5f;
+    const float card_x1 = card_x0 + card_w;
+
+    // Gamerscore badge (+XX G) metrics on far right
+    const std::string score_str = fmt::format("+{} G", draw_toast->gamerscore);
+    const float pill_font_size = 15.0f * s;
+    const ImVec2 score_extent = bold->CalcTextSizeA(pill_font_size, FLT_MAX, 0.0f, score_str.c_str());
+    const float pill_pad_x = 10.0f * s;
+    const float pill_w = score_extent.x + pill_pad_x * 2.0f;
+    const float pill_h = 24.0f * s;
+    const float pill_x1 = card_x1 - 16.0f * s;
+    const float pill_x0 = pill_x1 - pill_w;
+
+    const float text_x0 = card_x0 + 72.0f * s;
+    const float text_max_w = std::max(80.0f * s, pill_x0 - text_x0 - 12.0f * s);
+
+    // Word-wrap description into up to 2 lines
+    const float desc_size = 13.5f * s;
+    std::string desc_line1;
+    std::string desc_line2;
+    if (!draw_toast->description.empty()) {
+      if (reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, draw_toast->description.c_str()).x <= text_max_w) {
+        desc_line1 = draw_toast->description;
+      } else {
+        size_t split_pos = std::string::npos;
+        for (size_t i = 0; i < draw_toast->description.size(); ++i) {
+          if (draw_toast->description[i] == ' ') {
+            std::string prefix = draw_toast->description.substr(0, i);
+            if (reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, prefix.c_str()).x <= text_max_w) {
+              split_pos = i;
+            } else {
+              break;
+            }
+          }
+        }
+        if (split_pos != std::string::npos) {
+          desc_line1 = draw_toast->description.substr(0, split_pos);
+          desc_line2 = draw_toast->description.substr(split_pos + 1);
+        } else {
+          desc_line1 = draw_toast->description;
+          while (!desc_line1.empty() &&
+                 reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, desc_line1.c_str()).x > text_max_w) {
+            desc_line1.pop_back();
+          }
+          desc_line2 = draw_toast->description.substr(desc_line1.size());
+        }
+        if (reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, desc_line2.c_str()).x > text_max_w) {
+          while (!desc_line2.empty() &&
+                 reg->CalcTextSizeA(desc_size, FLT_MAX, 0.0f, (desc_line2 + "...").c_str()).x > text_max_w) {
+            desc_line2.pop_back();
+          }
+          desc_line2 += "...";
+        }
+      }
+    }
+
+    const float card_h = (!desc_line2.empty() ? 104.0f : (!desc_line1.empty() ? 88.0f : 76.0f)) * s;
+    const float base_y1 = io.DisplaySize.y - 65.0f * s;
+    const float card_y1 = base_y1 + y_offset * s;
+    const float card_y0 = card_y1 - card_h;
+    const float corner_radius = 8.0f * s;
+
+    const ImU32 bg_col = IM_COL32(10, 14, 16, static_cast<int>(238 * alpha));
+    const ImU32 border_col = IM_COL32(213, 235, 10, static_cast<int>(220 * alpha));
+    const ImU32 shadow_col = IM_COL32(0, 0, 0, static_cast<int>(140 * alpha));
+
+    // Drop shadow
+    dl->AddRectFilled(ImVec2(card_x0 - 2.0f * s, card_y0 + 4.0f * s),
+                      ImVec2(card_x1 + 2.0f * s, card_y1 + 6.0f * s),
+                      shadow_col, corner_radius + 2.0f * s);
+
+    // Card background & border
+    dl->AddRectFilled(ImVec2(card_x0, card_y0), ImVec2(card_x1, card_y1),
+                      bg_col, corner_radius);
+    dl->AddRect(ImVec2(card_x0, card_y0), ImVec2(card_x1, card_y1),
+                border_col, corner_radius, 0, 1.5f * s);
+
+    const float badge_cx = card_x0 + 39.0f * s;
+    const float badge_cy = (card_y0 + card_y1) * 0.5f;
+
+    // Left icon or Gamerscore badge
+    void* icon_tex = manager_ ? manager_->GetAchievementIcon(draw_toast->id) : nullptr;
+    if (icon_tex) {
+      const float icon_sz = 48.0f * s;
+      const float icon_x0 = card_x0 + 15.0f * s;
+      const float icon_y0 = badge_cy - icon_sz * 0.5f;
+      const float icon_x1 = icon_x0 + icon_sz;
+      const float icon_y1 = icon_y0 + icon_sz;
+      const float icon_radius = 6.0f * s;
+
+      dl->AddImageRounded(reinterpret_cast<ImTextureID>(icon_tex),
+                          ImVec2(icon_x0, icon_y0), ImVec2(icon_x1, icon_y1),
+                          ImVec2(0, 0), ImVec2(1, 1),
+                          IM_COL32(255, 255, 255, static_cast<int>(255 * alpha)),
+                          icon_radius);
+      dl->AddRect(ImVec2(icon_x0, icon_y0), ImVec2(icon_x1, icon_y1),
+                  border_col, icon_radius, 0, 1.5f * s);
+    } else {
+      // Circular Xbox Gamerscore fallback badge on left
+      const float badge_r = 22.0f * s;
+
+      dl->AddCircleFilled(ImVec2(badge_cx, badge_cy), badge_r,
+                          IM_COL32(16, 50, 46, static_cast<int>(255 * alpha)), 32);
+      dl->AddCircle(ImVec2(badge_cx, badge_cy), badge_r,
+                    border_col, 32, 2.0f * s);
+
+      const float g_size = 20.0f * s;
+      const char* g_str = "G";
+      const ImVec2 g_extent = bold->CalcTextSizeA(g_size, FLT_MAX, 0.0f, g_str);
+      dl->AddText(bold, g_size,
+                  ImVec2(badge_cx - g_extent.x * 0.5f, badge_cy - g_extent.y * 0.5f),
+                  IM_COL32(255, 255, 255, static_cast<int>(255 * alpha)), g_str);
+    }
+
+    // Gamerscore badge (+XX G) on far right
+    const float pill_y0 = badge_cy - pill_h * 0.5f;
+    const float pill_y1 = badge_cy + pill_h * 0.5f;
+
+    dl->AddRectFilled(ImVec2(pill_x0, pill_y0), ImVec2(pill_x1, pill_y1),
+                      IM_COL32(213, 235, 10, static_cast<int>(40 * alpha)), 6.0f * s);
+    dl->AddRect(ImVec2(pill_x0, pill_y0), ImVec2(pill_x1, pill_y1),
+                IM_COL32(213, 235, 10, static_cast<int>(120 * alpha)), 6.0f * s, 0, 1.0f * s);
+    dl->AddText(bold, pill_font_size,
+                ImVec2(pill_x0 + pill_pad_x, pill_y0 + (pill_h - score_extent.y) * 0.5f),
+                IM_COL32(213, 235, 10, static_cast<int>(255 * alpha)), score_str.c_str());
+
+    // Header: "ACHIEVEMENT UNLOCKED"
+    const char* header_str = "ACHIEVEMENT UNLOCKED";
+    const float header_size = 12.0f * s;
+    dl->AddText(bold, header_size,
+                ImVec2(text_x0, card_y0 + 11.0f * s),
+                IM_COL32(213, 235, 10, static_cast<int>(255 * alpha)), header_str);
+
+    // Title:
+    const float title_size = 17.5f * s;
+    std::string truncated_title = draw_toast->name;
+    if (bold->CalcTextSizeA(title_size, FLT_MAX, 0.0f, truncated_title.c_str()).x > text_max_w) {
+      while (!truncated_title.empty() &&
+             bold->CalcTextSizeA(title_size, FLT_MAX, 0.0f, (truncated_title + "...").c_str()).x > text_max_w) {
+        truncated_title.pop_back();
+      }
+      truncated_title += "...";
+    }
+    dl->AddText(bold, title_size,
+                ImVec2(text_x0, card_y0 + 27.0f * s),
+                IM_COL32(250, 252, 252, static_cast<int>(255 * alpha)), truncated_title.c_str());
+
+    // Description:
+    const ImU32 desc_col = IM_COL32(195, 206, 210, static_cast<int>(245 * alpha));
+    if (!desc_line1.empty()) {
+      dl->AddText(reg, desc_size,
+                  ImVec2(text_x0, card_y0 + 50.0f * s),
+                  desc_col, desc_line1.c_str());
+    }
+    if (!desc_line2.empty()) {
+      dl->AddText(reg, desc_size,
+                  ImVec2(text_x0, card_y0 + 67.0f * s),
+                  desc_col, desc_line2.c_str());
+    }
+  }
+
+  // Draw fractional progress toast
+  if (draw_prog) {
+    const float p_x_offset = p_x_offset_raw * s;
+    const float p_card_w = 320.0f * s;
+    const float p_card_h = 74.0f * s;
+    const float p_card_x1 = io.DisplaySize.x - 24.0f * s + p_x_offset;
+    const float p_card_x0 = p_card_x1 - p_card_w;
+    const float p_card_y0 = io.DisplaySize.y * 0.44f - p_card_h * 0.5f;
+    const float p_card_y1 = p_card_y0 + p_card_h;
+    const float p_radius = 8.0f * s;
+
+    const ImU32 p_bg_col = IM_COL32(10, 14, 16, static_cast<int>(238 * p_alpha));
+    const ImU32 p_border_col = IM_COL32(213, 235, 10, static_cast<int>(220 * p_alpha));
+    const ImU32 p_shadow_col = IM_COL32(0, 0, 0, static_cast<int>(140 * p_alpha));
+
+    // Drop shadow
+    dl->AddRectFilled(ImVec2(p_card_x0 - 2.0f * s, p_card_y0 + 3.0f * s),
+                      ImVec2(p_card_x1 + 2.0f * s, p_card_y1 + 5.0f * s),
+                      p_shadow_col, p_radius + 2.0f * s);
+
+    // Card background & border
+    dl->AddRectFilled(ImVec2(p_card_x0, p_card_y0), ImVec2(p_card_x1, p_card_y1),
+                      p_bg_col, p_radius);
+    dl->AddRect(ImVec2(p_card_x0, p_card_y0), ImVec2(p_card_x1, p_card_y1),
+                p_border_col, p_radius, 0, 1.5f * s);
+
+    // Icon on left (if available)
+    void* p_icon_tex = manager_ ? manager_->GetAchievementIcon(draw_prog->achievement_id) : nullptr;
+    float p_text_x0 = p_card_x0 + 16.0f * s;
+    if (p_icon_tex) {
+      const float p_icon_sz = 40.0f * s;
+      const float p_icon_x0 = p_card_x0 + 12.0f * s;
+      const float p_icon_y0 = (p_card_y0 + p_card_y1) * 0.5f - p_icon_sz * 0.5f;
+      dl->AddImageRounded(reinterpret_cast<ImTextureID>(p_icon_tex),
+                          ImVec2(p_icon_x0, p_icon_y0),
+                          ImVec2(p_icon_x0 + p_icon_sz, p_icon_y0 + p_icon_sz),
+                          ImVec2(0, 0), ImVec2(1, 1),
+                          IM_COL32(255, 255, 255, static_cast<int>(255 * p_alpha)),
+                          6.0f * s);
+      dl->AddRect(ImVec2(p_icon_x0, p_icon_y0),
+                  ImVec2(p_icon_x0 + p_icon_sz, p_icon_y0 + p_icon_sz),
+                  p_border_col, 6.0f * s, 0, 1.0f * s);
+      p_text_x0 = p_icon_x0 + p_icon_sz + 12.0f * s;
+    }
+    const float p_text_x1 = p_card_x1 - 16.0f * s;
+
+    // Line 1: Item name (left) + fraction count (right)
+    const float item_font_sz = 14.0f * s;
+    const std::string count_str = fmt::format("{} / {}", draw_prog->current_count, draw_prog->total_count);
+    const ImVec2 count_extent = bold->CalcTextSizeA(item_font_sz, FLT_MAX, 0.0f, count_str.c_str());
+    const float count_x0 = p_text_x1 - count_extent.x;
+
+    dl->AddText(bold, item_font_sz,
+                ImVec2(count_x0, p_card_y0 + 10.0f * s),
+                IM_COL32(213, 235, 10, static_cast<int>(255 * p_alpha)), count_str.c_str());
+
+    std::string trunc_item = draw_prog->item_name;
+    const float max_item_w = std::max(40.0f * s, count_x0 - p_text_x0 - 8.0f * s);
+    while (!trunc_item.empty() && bold->CalcTextSizeA(item_font_sz, FLT_MAX, 0.0f, trunc_item.c_str()).x > max_item_w) {
+      trunc_item.pop_back();
+    }
+    dl->AddText(bold, item_font_sz,
+                ImVec2(p_text_x0, p_card_y0 + 10.0f * s),
+                IM_COL32(250, 252, 252, static_cast<int>(255 * p_alpha)), trunc_item.c_str());
+
+    // Line 2: Progress bar
+    const float bar_y0 = p_card_y0 + 32.0f * s;
+    const float bar_y1 = bar_y0 + 6.0f * s;
+    const float bar_w = p_text_x1 - p_text_x0;
+    const float frac = draw_prog->total_count > 0
+                           ? std::clamp(static_cast<float>(draw_prog->current_count) /
+                                            static_cast<float>(draw_prog->total_count),
+                                        0.0f, 1.0f)
+                           : 0.0f;
+    // Track
+    dl->AddRectFilled(ImVec2(p_text_x0, bar_y0), ImVec2(p_text_x1, bar_y1),
+                      IM_COL32(32, 40, 44, static_cast<int>(220 * p_alpha)), 3.0f * s);
+    // Fill
+    if (frac > 0.0f) {
+      dl->AddRectFilled(ImVec2(p_text_x0, bar_y0), ImVec2(p_text_x0 + bar_w * frac, bar_y1),
+                        IM_COL32(213, 235, 10, static_cast<int>(255 * p_alpha)), 3.0f * s);
+    }
+
+    // Line 3: Parent achievement name
+    const float parent_font_sz = 12.0f * s;
+    dl->AddText(reg, parent_font_sz,
+                ImVec2(p_text_x0, p_card_y0 + 46.0f * s),
+                IM_COL32(180, 190, 195, static_cast<int>(235 * p_alpha)), draw_prog->parent_name.c_str());
   }
 }
 
@@ -1954,7 +1989,9 @@ void AchievementManager::Update(float dt) {
         z2[2] = -181.0f;
       }
 
-      const float rad = def.trigger_radius > 0.0f ? def.trigger_radius : 15.0f;
+      const float rad = (def.key.find("sample_gap") != std::string::npos || def.trigger_radius <= 0.0f)
+                            ? std::max(def.trigger_radius, 25.0f)
+                            : std::max(def.trigger_radius, 25.0f);
 
       const float d1_dx = pos[0] - z1[0];
       const float d1_dy = pos[1] - z1[1];
@@ -1977,12 +2014,17 @@ void AchievementManager::Update(float dt) {
 
       const bool in_air_or_grind = IsSkaterAirborneOrGrinding() || airborne;
 
+      // Allow 60s for long continuous grinds (270m rail takes ~27s at 10 m/s)
+      const float max_gap_time = 60.0f;
+      // Allow 2.0s grace period on ground for rail hopping, cracks, or quick trick transitions
+      const float ground_grace_period = 2.0f;
+
       // Check if skater is in Zone 1 (Takeoff)
       if (z1_dist_sq <= rad * rad) {
         if (gstate.active && gstate.start_zone == 2 && z2_dist_sq > rad * rad) {
           const float elapsed =
               std::chrono::duration<float>(now - gstate.takeoff_time).count();
-          if (elapsed >= 0.10f && elapsed <= 18.0f && !bailed_or_off) {
+          if (elapsed >= 0.10f && elapsed <= max_gap_time && !bailed_or_off && gstate.was_airborne) {
             UnlockInternal(0, def.id);
             gstate.active = false;
             gstate.was_airborne = false;
@@ -1991,12 +2033,17 @@ void AchievementManager::Update(float dt) {
             continue;
           }
         }
-        if (in_air_or_grind) {
+        if (in_air_or_grind || speed_mph > 3.0f) {
           gstate.active = true;
           gstate.start_zone = 1;
           gstate.takeoff_time = now;
-          gstate.was_airborne = true;
-          gstate.on_ground = false;
+          if (in_air_or_grind) {
+            gstate.was_airborne = true;
+            gstate.on_ground = false;
+          } else {
+            gstate.on_ground = true;
+            gstate.ground_contact_time = now;
+          }
         }
       }
       // Check if skater is in Zone 2 (Landing)
@@ -2004,7 +2051,7 @@ void AchievementManager::Update(float dt) {
         if (gstate.active && gstate.start_zone == 1 && z1_dist_sq > rad * rad) {
           const float elapsed =
               std::chrono::duration<float>(now - gstate.takeoff_time).count();
-          if (elapsed >= 0.10f && elapsed <= 18.0f && !bailed_or_off) {
+          if (elapsed >= 0.10f && elapsed <= max_gap_time && !bailed_or_off && gstate.was_airborne) {
             UnlockInternal(0, def.id);
             gstate.active = false;
             gstate.was_airborne = false;
@@ -2013,19 +2060,24 @@ void AchievementManager::Update(float dt) {
             continue;
           }
         }
-        if (in_air_or_grind) {
+        if (in_air_or_grind || speed_mph > 3.0f) {
           gstate.active = true;
           gstate.start_zone = 2;
           gstate.takeoff_time = now;
-          gstate.was_airborne = true;
-          gstate.on_ground = false;
+          if (in_air_or_grind) {
+            gstate.was_airborne = true;
+            gstate.on_ground = false;
+          } else {
+            gstate.on_ground = true;
+            gstate.ground_contact_time = now;
+          }
         }
       }
       // Skater is between zones
       else if (gstate.active) {
         const float elapsed =
             std::chrono::duration<float>(now - gstate.takeoff_time).count();
-        if (elapsed > 18.0f) {
+        if (elapsed > max_gap_time) {
           gstate.active = false;
           gstate.was_airborne = false;
           gstate.start_zone = 0;
@@ -2034,9 +2086,9 @@ void AchievementManager::Update(float dt) {
         }
 
         // Between takeoff and landing zones, player must remain off flat ground.
-        // Allow a 0.6s grace period for rail hopping, cracks, or quick trick transitions.
         if (in_air_or_grind) {
           gstate.on_ground = false;
+          gstate.was_airborne = true;
         } else {
           if (!gstate.on_ground) {
             gstate.on_ground = true;
@@ -2044,7 +2096,7 @@ void AchievementManager::Update(float dt) {
           } else {
             const float ground_elapsed =
                 std::chrono::duration<float>(now - gstate.ground_contact_time).count();
-            if (ground_elapsed > 0.6f) {
+            if (ground_elapsed > ground_grace_period) {
               gstate.active = false;
               gstate.was_airborne = false;
               gstate.start_zone = 0;
@@ -3043,18 +3095,18 @@ extern "C" void sub_827743A0(PPCContext& ctx, uint8_t* base) {
   const uint32_t hud_obj = ctx.r3.u32;
   const uint32_t skater = ctx.r4.u32;
   if (CheckAndRecordLocalHudGate(base, hud_obj, skater)) {
-    const uint32_t telemetry = LoadU32(base, skater + 60u);
-    if (IsValidGuestAddr(telemetry, 15000)) {
-      const bool bailed = (LoadU8(base, telemetry + 14640u) != 0) ||
-                          (LoadU8(base, telemetry + 14630u) != 0);
-      const bool in_seq = (LoadU8(base, telemetry + 14636u) != 0) ||
-                          (LoadU8(base, telemetry + 14658u) != 0);
-      const bool seq_banked = (LoadU8(base, telemetry + 14626u) != 0);
+    const uint32_t skater_tracker = LoadU32(base, skater + 60u);
+    if (IsValidGuestAddr(skater_tracker, 15000)) {
+      const bool bailed = (LoadU8(base, skater_tracker + 14640u) != 0) ||
+                          (LoadU8(base, skater_tracker + 14630u) != 0);
+      const bool in_seq = (LoadU8(base, skater_tracker + 14636u) != 0) ||
+                          (LoadU8(base, skater_tracker + 14658u) != 0);
+      const bool seq_banked = (LoadU8(base, skater_tracker + 14626u) != 0);
 
       const int32_t active_tricks = static_cast<int32_t>(
-          LoadU32(base, telemetry + 120u) - LoadU32(base, telemetry + 124u));
+          LoadU32(base, skater_tracker + 120u) - LoadU32(base, skater_tracker + 124u));
       const int32_t banked_tricks = static_cast<int32_t>(
-          LoadU32(base, telemetry + 84u) - LoadU32(base, telemetry + 88u));
+          LoadU32(base, skater_tracker + 84u) - LoadU32(base, skater_tracker + 88u));
 
       static int32_t s_max_active_tricks = 0;
       static uint64_t s_seen_reset_epoch = 0;
@@ -3078,19 +3130,19 @@ extern "C" void sub_827743A0(PPCContext& ctx, uint8_t* base) {
 
         if (seq_banked || (!in_seq && s_max_active_tricks > 0)) {
           if (auto* mgr = skate3::AchievementManager::instance()) {
-            const int32_t trick_score = static_cast<int32_t>(LoadU32(base, telemetry + 108u));
+            const int32_t trick_score = static_cast<int32_t>(LoadU32(base, skater_tracker + 108u));
             const int32_t line_score = std::max(
-                trick_score, static_cast<int32_t>(LoadU32(base, telemetry + 0u)));
+                trick_score, static_cast<int32_t>(LoadU32(base, skater_tracker + 0u)));
             const int32_t tricks_chained = std::max(banked_tricks, s_max_active_tricks);
-            const int32_t manuals_chained = static_cast<int32_t>(LoadU32(base, telemetry + 112u));
-            const float max_grind = LoadF32(base, telemetry + 220u);
-            const float man_d1 = LoadF32(base, telemetry + 60u);
-            const float man_d2 = LoadF32(base, telemetry + 76u);
+            const int32_t manuals_chained = static_cast<int32_t>(LoadU32(base, skater_tracker + 112u));
+            const float max_grind = LoadF32(base, skater_tracker + 220u);
+            const float man_d1 = LoadF32(base, skater_tracker + 60u);
+            const float man_d2 = LoadF32(base, skater_tracker + 76u);
             const float max_manual = std::max(
                 std::isfinite(man_d1) ? man_d1 : 0.0f,
                 std::isfinite(man_d2) ? man_d2 : 0.0f);
             const int32_t moveable_objs =
-                static_cast<int32_t>(static_cast<int8_t>(LoadU8(base, telemetry + 5758u)));
+                static_cast<int32_t>(static_cast<int8_t>(LoadU8(base, skater_tracker + 5758u)));
 
             if (trick_score > 0) {
               mgr->OnStatUpdated("trick_score", static_cast<float>(trick_score));
@@ -3127,13 +3179,13 @@ extern "C" void sub_82774080(PPCContext& ctx, uint8_t* base) {
   const uint32_t hud_obj = ctx.r3.u32;
   const uint32_t skater = ctx.r4.u32;
   if (CheckAndRecordLocalHudGate(base, hud_obj, skater)) {
-    const uint32_t telemetry = LoadU32(base, skater + 60u);
-    if (IsValidGuestAddr(telemetry, 15000)) {
-      const bool bailed = (LoadU8(base, telemetry + 14640u) != 0) ||
-                          (LoadU8(base, telemetry + 14630u) != 0);
-      const bool in_seq = (LoadU8(base, telemetry + 14636u) != 0) ||
-                          (LoadU8(base, telemetry + 14658u) != 0);
-      const bool seq_banked = (LoadU8(base, telemetry + 14626u) != 0);
+    const uint32_t skater_tracker = LoadU32(base, skater + 60u);
+    if (IsValidGuestAddr(skater_tracker, 15000)) {
+      const bool bailed = (LoadU8(base, skater_tracker + 14640u) != 0) ||
+                          (LoadU8(base, skater_tracker + 14630u) != 0);
+      const bool in_seq = (LoadU8(base, skater_tracker + 14636u) != 0) ||
+                          (LoadU8(base, skater_tracker + 14658u) != 0);
+      const bool seq_banked = (LoadU8(base, skater_tracker + 14626u) != 0);
 
       static std::vector<int32_t> s_pending_tricks;
       static bool s_was_in_seq = false;
@@ -3146,7 +3198,7 @@ extern "C" void sub_82774080(PPCContext& ctx, uint8_t* base) {
       }
 
       auto collect_tricks = [&]() {
-        const uint32_t queues[2] = {telemetry + 1032u, telemetry + 1840u};
+        const uint32_t queues[2] = {skater_tracker + 1032u, skater_tracker + 1840u};
         for (uint32_t q : queues) {
           const uint32_t count = std::min(LoadU32(base, q), 4u);
           for (uint32_t i = 0; i < count; ++i) {
@@ -3181,7 +3233,7 @@ extern "C" void sub_82774080(PPCContext& ctx, uint8_t* base) {
                 REXLOG_INFO("Skate 3 Achievements: Landed trick '{}' (trick_id={})", name, trick_id);
                 mgr->OnTrickLanded(name);
               }
-              if (trick_id == 252 && LoadU32(base, telemetry + 9844u) != 0) {
+              if (trick_id == 252 && LoadU32(base, skater_tracker + 9844u) != 0) {
                 mgr->OnTrickLanded("Miracle Whip");
               }
             }
@@ -3210,8 +3262,8 @@ extern "C" void sub_82773D98(PPCContext& ctx, uint8_t* base) {
         mgr->OnTrickLanded(name);
       }
       if (trick_id == 252 && IsValidGuestAddr(skater, 128)) {
-        const uint32_t telemetry = LoadU32(base, skater + 60u);
-        if (IsValidGuestAddr(telemetry, 15000) && LoadU32(base, telemetry + 9844u) != 0) {
+        const uint32_t skater_tracker = LoadU32(base, skater + 60u);
+        if (IsValidGuestAddr(skater_tracker, 15000) && LoadU32(base, skater_tracker + 9844u) != 0) {
           mgr->OnTrickLanded("Miracle Whip");
         }
       }
@@ -3224,13 +3276,18 @@ extern "C" void sub_82773D98(PPCContext& ctx, uint8_t* base) {
 extern "C" void sub_82774828(PPCContext& ctx, uint8_t* base) {
   const uint32_t hud_obj = ctx.r3.u32;
   const uint32_t skater = ctx.r4.u32;
-  if (CheckAndRecordLocalHudGate(base, hud_obj, skater)) {
-    const uint32_t telemetry = LoadU32(base, skater + 60u);
-    if (IsValidGuestAddr(telemetry, 15000)) {
-      if (LoadU8(base, telemetry + 14647u) != 0 || LoadU8(base, telemetry + 14646u) != 0) {
-        const uint32_t hom = telemetry + 12336u;
+  const bool gate_ok = CheckAndRecordLocalHudGate(base, hud_obj, skater);
+
+  auto check_and_report_hom = [&](uint32_t sk) {
+    if (!gate_ok || !IsValidGuestAddr(sk, 128)) return;
+    const uint32_t skater_tracker = LoadU32(base, sk + 60u);
+    if (IsValidGuestAddr(skater_tracker, 15000)) {
+      if (LoadU8(base, skater_tracker + 14647u) != 0 || LoadU8(base, skater_tracker + 14646u) != 0) {
+        const uint32_t hom = skater_tracker + 12336u;
         const int32_t bail_score = static_cast<int32_t>(LoadU32(base, hom + 1196u));
-        const int32_t bones_broken = static_cast<int32_t>(LoadU32(base, hom + 904u));
+        // hom + 896u is the cumulative broken bones count in the bail, hom + 904u is the previous/delta count
+        const int32_t bones_broken = static_cast<int32_t>(
+            std::max(LoadU32(base, hom + 896u), LoadU32(base, hom + 904u)));
         if (auto* mgr = skate3::AchievementManager::instance()) {
           if (bail_score > 0 && bail_score < 10000000) {
             mgr->OnStatUpdated("bail_score", static_cast<float>(bail_score));
@@ -3241,8 +3298,11 @@ extern "C" void sub_82774828(PPCContext& ctx, uint8_t* base) {
         }
       }
     }
-  }
+  };
+
+  check_and_report_hom(skater);
   __imp__sub_82774828(ctx, base);
+  check_and_report_hom(skater);
 }
 
 // 8. Career Board Sales & Challenge/Spot Completion Hooks

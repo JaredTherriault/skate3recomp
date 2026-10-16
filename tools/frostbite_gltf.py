@@ -792,12 +792,27 @@ def load_gltf_mesh_and_skin(gltf_path: Path):
     all_pos, all_nrm, all_uv, all_mat, all_j, all_w, all_tris = [], [], [], [], [], [], []
     v_base = 0
 
+    seen_pos_accs = {}
+
     for mesh in gltf.get("meshes", []):
         for prim in mesh.get("primitives", []):
             attrs = prim["attributes"]
             if "POSITION" not in attrs:
                 continue
-            p_pos = read_acc(attrs["POSITION"]).astype(np.float32)
+            pos_acc_idx = attrs["POSITION"]
+            mat_id = prim.get("material", 0)
+
+            if pos_acc_idx in seen_pos_accs:
+                entry_idx, v_start = seen_pos_accs[pos_acc_idx]
+                if "indices" in prim:
+                    idx = read_acc(prim["indices"]).astype(np.int32).reshape(-1, 3)
+                else:
+                    idx = np.arange(len(all_pos[entry_idx]), dtype=np.int32).reshape(-1, 3)
+                all_mat[entry_idx][idx.flatten()] = mat_id
+                all_tris.append(idx + v_start)
+                continue
+
+            p_pos = read_acc(pos_acc_idx).astype(np.float32)
             V = len(p_pos)
             p_nrm = read_acc(attrs["NORMAL"]).astype(np.float32) if "NORMAL" in attrs else np.zeros((V, 3), dtype=np.float32)
             p_uv = read_acc(attrs["TEXCOORD_0"]).astype(np.float32) if "TEXCOORD_0" in attrs else np.zeros((V, 2), dtype=np.float32)
@@ -826,7 +841,7 @@ def load_gltf_mesh_and_skin(gltf_path: Path):
             else:
                 idx = np.arange(V, dtype=np.int32).reshape(-1, 3)
 
-            mat_id = prim.get("material", 0)
+            seen_pos_accs[pos_acc_idx] = (len(all_pos), v_base)
             all_pos.append(p_pos)
             all_nrm.append(p_nrm)
             all_uv.append(p_uv)
@@ -935,7 +950,7 @@ def pack_frostbite_meshset(
             u_out[v] = u_loc
             v_out[v] = v_loc - sl
 
-    # Optional template chunk matching: preserve exact Sub[1]/Sub[5] split and Stream 7 tangentSpace
+    # Optional template chunk matching: preserve exact Sub[1]/Sub[5] split, 8-bone skinning, and Stream 7 tangentSpace
     v_sub_id = None
     v_ts4 = None
     if template_chunk_bytes is not None:
@@ -943,6 +958,7 @@ def pack_frostbite_meshset(
             from scipy.spatial import cKDTree
             nsec_t, sec_off_t = struct.unpack_from("<IQ", template_res_bytes, 0x00D0 + 0x18)
             tpl_pos, tpl_uv, tpl_sub, tpl_s7 = [], [], [], []
+            tpl_bi0, tpl_bi1, tpl_bw0, tpl_bw1 = [], [], [], []
             for s in (1, 5):
                 sb_t = sec_off_t + s * 0x180
                 _, _, v_off_t, v_cnt_t = struct.unpack_from("<4I", template_res_bytes, sb_t + 0x30)
@@ -950,26 +966,44 @@ def pack_frostbite_meshset(
                     continue
                 soff_t = [v_off_t + sum(STRIDES[:k]) * v_cnt_t for k in range(8)]
                 p_t = np.frombuffer(template_chunk_bytes, dtype="<f4", count=v_cnt_t * 3, offset=soff_t[0]).reshape(v_cnt_t, 3)
+                bi0_t = np.frombuffer(template_chunk_bytes, dtype="<u2", count=v_cnt_t * 4, offset=soff_t[1]).reshape(v_cnt_t, 4)
+                bi1_t = np.frombuffer(template_chunk_bytes, dtype="<u2", count=v_cnt_t * 4, offset=soff_t[2]).reshape(v_cnt_t, 4)
+                bw0_t = np.frombuffer(template_chunk_bytes, dtype="u1", count=v_cnt_t * 4, offset=soff_t[3]).reshape(v_cnt_t, 4)
+                bw1_t = np.frombuffer(template_chunk_bytes, dtype="u1", count=v_cnt_t * 4, offset=soff_t[4]).reshape(v_cnt_t, 4)
                 u_t = np.frombuffer(template_chunk_bytes, dtype="<f4", count=v_cnt_t * 2, offset=soff_t[5]).reshape(v_cnt_t, 2)
                 s7_t = np.frombuffer(template_chunk_bytes, dtype=np.uint8, count=v_cnt_t * 4, offset=soff_t[7]).reshape(v_cnt_t, 4)
                 tpl_pos.append(p_t)
                 tpl_uv.append(u_t)
                 tpl_sub.append(np.full(v_cnt_t, s, dtype=np.int32))
                 tpl_s7.append(s7_t)
+                tpl_bi0.append(bi0_t)
+                tpl_bi1.append(bi1_t)
+                tpl_bw0.append(bw0_t)
+                tpl_bw1.append(bw1_t)
             if tpl_pos:
                 tpl_pos = np.concatenate(tpl_pos, axis=0)
                 tpl_uv = np.concatenate(tpl_uv, axis=0)
                 tpl_sub = np.concatenate(tpl_sub, axis=0)
                 tpl_s7 = np.concatenate(tpl_s7, axis=0)
+                tpl_bi0 = np.concatenate(tpl_bi0, axis=0)
+                tpl_bi1 = np.concatenate(tpl_bi1, axis=0)
+                tpl_bw0 = np.concatenate(tpl_bw0, axis=0)
+                tpl_bw1 = np.concatenate(tpl_bw1, axis=0)
                 # Query in 5D (UV weighted strongly + 3D position so lengthened hair ribbons still match their UV card)
                 tpl_feat = np.column_stack([tpl_uv[:, 0] * 4.0, tpl_uv[:, 1] * 4.0, tpl_pos])
                 in_feat = np.column_stack([u_out * 4.0, v_out * 4.0, pos])
                 tree = cKDTree(tpl_feat)
                 dists, idxs = tree.query(in_feat, k=1)
-                if float(np.median(dists)) < 0.25:
+                if float(np.median(dists)) < 0.75:
                     v_sub_id = tpl_sub[idxs]
                     v_ts4 = tpl_s7[idxs].copy()
-                    print(f"[Frostbite Packer] Inherited subset split & tangent space from template chunk (median dist={np.median(dists):.4f})")
+                    # Inherit authentic 8-bone skinning from template chunk
+                    inherit_mask = dists < 0.25
+                    fb_bi[inherit_mask, :4] = tpl_bi0[idxs[inherit_mask]]
+                    fb_bi[inherit_mask, 4:8] = tpl_bi1[idxs[inherit_mask]]
+                    fb_bw[inherit_mask, :4] = tpl_bw0[idxs[inherit_mask]]
+                    fb_bw[inherit_mask, 4:8] = tpl_bw1[idxs[inherit_mask]]
+                    print(f"[Frostbite Packer] Inherited subset split, 8-bone skinning ({np.sum(inherit_mask):,}/{V:,} verts) & tangent space from template chunk (median dist={np.median(dists):.4f})")
         except Exception as ex:
             print(f"[Frostbite Packer] Note: template chunk lookup skipped ({ex})")
 
@@ -978,16 +1012,28 @@ def pack_frostbite_meshset(
         sub1_tris = tris[tri_sub == 1]
         sub5_tris = tris[tri_sub == 5]
     else:
-        tri_sl = slice_id[tris[:, 0]]
-        sub1_tris = tris[tri_sl <= 1]
-        sub5_tris = tris[tri_sl >= 2]
+        # Fallback: Frostbite costume layout
+        # Sub[1] (FullbodyBottom_mat): Slice 1 (Boots) + lower body Slice 3 (Legs/Hips, Y < 0.85)
+        # Sub[5] (FullbodyTop_mat): Slice 0 (Outfit) + Slice 2 (Face) + upper body Slice 3 (Torso/Arms/Hair, Y >= 0.85)
+        is_bottom = np.zeros(V, dtype=bool)
+        for v in range(V):
+            sl = slice_id[v]
+            if sl == 1:
+                is_bottom[v] = True
+            elif sl == 3 and pos[v, 1] < 0.85:
+                is_bottom[v] = True
+            else:
+                is_bottom[v] = False
+        tri_is_bottom = is_bottom[tris[:, 0]]
+        sub1_tris = tris[tri_is_bottom]
+        sub5_tris = tris[~tri_is_bottom]
 
     if len(sub1_tris) == 0 and len(sub5_tris) > 0:
         sub1_tris = sub5_tris[:1]
     elif len(sub5_tris) == 0 and len(sub1_tris) > 0:
         sub5_tris = sub1_tris[:1]
 
-    def build_subset_streams(sub_tris):
+    def build_subset_streams_56(sub_tris):
         u_verts, inv = np.unique(sub_tris.flatten(), return_inverse=True)
         local_tris = inv.reshape(-1, 3).astype(np.uint16)
         v_cnt = len(u_verts)
@@ -1027,81 +1073,70 @@ def pack_frostbite_meshset(
     struct.pack_into("<3f", res, 0x10, float(bmin[0]), float(bmin[1]), float(bmin[2]))
     struct.pack_into("<3f", res, 0x20, float(bmax[0]), float(bmax[1]), float(bmax[2]))
 
-    dummy_vb = bytearray(3 * 56)
-    dummy_ib = struct.pack("<3H", 0, 1, 2)
+    nsec0, sec_off0 = struct.unpack_from("<IQ", res, 0x00D0 + 0x18)
 
-    vb_parts = []
-    ib_parts = []
-    cur_v_off = 0
-    cur_start_idx = 0
-    sec_records = []
+    # 1. Build LOD streams (56 bytes/vert, 8 streams, 8-bone skinning)
+    dummy_vb_56 = bytearray(3 * 56)
+    dummy_ib = struct.pack("<3H", 0, 1, 2)
+    vb_parts_56 = []
+    ib_parts_56 = []
+    cur_v_off_56 = 0
+    cur_start_idx_56 = 0
+    sec_records_56 = []
     sec_bounds = {}
 
-    nsec0, _ = struct.unpack_from("<IQ", res, 0x00D0 + 0x18)
     for s in range(nsec0):
         if s == 1:
-            v_cnt, prim_cnt, vb_b, ib_b, bounds = build_subset_streams(sub1_tris)
-            sec_bounds[s] = bounds
+            v_cnt, prim_cnt, vb_b, ib_b, bounds = build_subset_streams_56(sub1_tris)
+            sec_bounds[s] = (1.1635, bounds[1], bounds[2])
         elif s == 5:
-            v_cnt, prim_cnt, vb_b, ib_b, bounds = build_subset_streams(sub5_tris)
-            sec_bounds[s] = bounds
+            v_cnt, prim_cnt, vb_b, ib_b, bounds = build_subset_streams_56(sub5_tris)
+            sec_bounds[s] = (1.4753, bounds[1], bounds[2])
         else:
-            v_cnt, prim_cnt, vb_b, ib_b = 3, 1, bytes(dummy_vb), dummy_ib
+            v_cnt, prim_cnt, vb_b, ib_b = 3, 1, bytes(dummy_vb_56), dummy_ib
 
-        # Frostbite vertex buffers are strictly contiguous (SoA streams 56B/vert) without inter-section padding,
-        # ensuring v_off remains an exact integer multiple of vertex stride (56) required by the GPU and DingoMorphMemory.
-        sec_records.append((prim_cnt, cur_start_idx, cur_v_off, v_cnt))
-        vb_parts.append(vb_b)
-        cur_v_off += len(vb_b)
+        sec_records_56.append((prim_cnt, cur_start_idx_56, cur_v_off_56, v_cnt))
+        vb_parts_56.append(vb_b)
+        cur_v_off_56 += len(vb_b)
+        ib_parts_56.append(ib_b)
+        cur_start_idx_56 += prim_cnt * 3
 
-        ib_parts.append(ib_b)
-        cur_start_idx += prim_cnt * 3
-
-        # Frostbite MeshSet requires 4-index (8-byte) alignment for each section's start_idx.
-        # Pad with dummy 16-bit indices so the next section begins on an 8-byte boundary.
-        pad_i = (4 - (cur_start_idx % 4)) % 4
+        pad_i = (4 - (cur_start_idx_56 % 4)) % 4
         if pad_i:
-            ib_parts.append(b"\x00\x00" * pad_i)
-            cur_start_idx += pad_i
+            ib_parts_56.append(b"\x00\x00" * pad_i)
+            cur_start_idx_56 += pad_i
 
-    pad_vb_end = (16 - (cur_v_off % 16)) % 16
-    if pad_vb_end:
-        vb_parts.append(b"\x00" * pad_vb_end)
-        cur_v_off += pad_vb_end
+    pad_vb_end_56 = (16 - (cur_v_off_56 % 16)) % 16
+    if pad_vb_end_56:
+        vb_parts_56.append(b"\x00" * pad_vb_end_56)
+        cur_v_off_56 += pad_vb_end_56
 
-    vb_all = b"".join(vb_parts)
-    ib_all = b"".join(ib_parts)
-    pad_ib_end = (16 - (len(ib_all) % 16)) % 16
-    if pad_ib_end:
-        ib_all += b"\x00" * pad_ib_end
+    vb_all_56 = b"".join(vb_parts_56)
+    ib_all_56 = b"".join(ib_parts_56)
+    pad_ib_end_56 = (16 - (len(ib_all_56) % 16)) % 16
+    if pad_ib_end_56:
+        ib_all_56 += b"\x00" * pad_ib_end_56
 
-    vb_sz = len(vb_all)
-    ib_sz = len(ib_all)
+    vb_sz_56 = len(vb_all_56)
+    ib_sz_56 = len(ib_all_56)
+    chunk_out_56 = vb_all_56 + ib_all_56
 
-    # Update all 6 LOD descriptors in mesh_res.bin so every LOD distance uses the new mesh
-    for lod_idx in range(6):
-        lb = 0x00D0 + lod_idx * 0x00C0
-        if lb + 0x90 > len(res):
-            break
-        nsec, sec_off = struct.unpack_from("<IQ", res, lb + 0x18)
-        if nsec != nsec0 or sec_off + nsec * 0x180 > len(res):
-            continue
-        for s, (prim_cnt, start_idx, v_off, v_cnt) in enumerate(sec_records):
-            sb = sec_off + s * 0x180
-            struct.pack_into("<4I", res, sb + 0x30, prim_cnt, start_idx, v_off, v_cnt)
-            # CRITICAL: Frostbite DingoMorphMemory reads secondary stream offsets at sb+0x64 and sb+0x150!
-            # Mismatches here cause memcpy access violations (0xc0000005) in DingoMorphMemory.
-            struct.pack_into("<I", res, sb + 0x64, v_off)
-            struct.pack_into("<I", res, sb + 0x150, start_idx)
-            if s in sec_bounds:
-                rad_s, bmin_s, bmax_s = sec_bounds[s]
-                struct.pack_into("<f", res, sb + 0x15c, rad_s)
-                struct.pack_into("<3f", res, sb + 0x160, float(bmin_s[0]), float(bmin_s[1]), float(bmin_s[2]))
-                struct.pack_into("<3f", res, sb + 0x170, float(bmax_s[0]), float(bmax_s[1]), float(bmax_s[2]))
-        struct.pack_into("<II", res, lb + 0x68, ib_sz, vb_sz)
+    # 2. Update LOD 0 descriptor in mesh_res.bin (stride 56).
+    # Preserve authentic decimated descriptors for LOD 1..5 so distance streaming
+    # stays within engine buffer budgets without memcpy overruns.
+    for s, (prim_cnt, start_idx, v_off, v_cnt) in enumerate(sec_records_56):
+        sb0 = sec_off0 + s * 0x180
+        struct.pack_into("<4I", res, sb0 + 0x30, prim_cnt, start_idx, v_off, v_cnt)
+        struct.pack_into("<I", res, sb0 + 0x64, v_off)
+        struct.pack_into("<I", res, sb0 + 0x150, start_idx)
+        if s in sec_bounds:
+            rad_s, bmin_s, bmax_s = sec_bounds[s]
+            struct.pack_into("<f", res, sb0 + 0x15c, rad_s)
+            struct.pack_into("<3f", res, sb0 + 0x160, float(bmin_s[0]), float(bmin_s[1]), float(bmin_s[2]))
+            struct.pack_into("<3f", res, sb0 + 0x170, float(bmax_s[0]), float(bmax_s[1]), float(bmax_s[2]))
+    struct.pack_into("<II", res, 0x00D0 + 0x68, ib_sz_56, vb_sz_56)
 
-    chunk_out = vb_all + ib_all
-    return bytes(res), chunk_out
+    return bytes(res), chunk_out_56
 
 
 # ---------------------------------------------------------------------------
@@ -1492,6 +1527,30 @@ def _derive_costume_slug7_and_disp7(costume_id: str) -> tuple[str, str]:
         disp7 = "EveEdit"
         slug7 = "eveedit"
     return slug7, disp7
+# Authentic pre-decimated LOD 1..5 chunks embedded in base cas_01.cas (<= 141,466,809 B)
+# (offset, cas_sz, raw_len, sha1_bytes)
+AUTH_LOD_CHUNKS = {
+    # LOD 1
+    "7023b51f857abb479e3b9f116dfd69e1": (
+        0x2681d4, 0x151282, 3237760, bytes.fromhex("54c65e946d84ed98c18f5819efccb46939221ed0")
+    ),
+    # LOD 2
+    "aa3082a94862564fab4eb623c0fb72ca": (
+        0x3b9458, 0xd177b, 1626960, bytes.fromhex("c8135ba91316f7a25f930db3828718de40688288")
+    ),
+    # LOD 3
+    "b3f0bf551d7c8a4693c3508d5bbc8dc6": (
+        0x48abd4, 0x71282, 980272, bytes.fromhex("aba751dec013906ecd54bafa7926b03f39ee3753")
+    ),
+    # LOD 4
+    "c6dc6ff7e08e0942a3a3d749a615c5e5": (
+        0x4fbe58, 0x3ccec, 554288, bytes.fromhex("41758327235d4183adfcd7165fbed338f1e5d57e")
+    ),
+    # LOD 5
+    "dedf6336651cc14da1f784325de1be37": (
+        0x538b44, 0x2e6cd, 449104, bytes.fromhex("af9809e77263421a5e45d4d6d5343fb147d088e8")
+    ),
+}
 
 
 def patch_reskate_mod_directory(
@@ -1504,6 +1563,10 @@ def patch_reskate_mod_directory(
     mod_author: str | None = None,
     mod_desc: str | None = None,
     costume_id: str | None = None,
+    chunk44_out: bytes | None = None,
+    chunk44_cas_bytes: bytes | None = None,
+    chunk_lod1_out: bytes | None = None,
+    chunk_lod1_cas_bytes: bytes | None = None,
 ):
     """Patch a ReSkate Studio mod directory (cas_01.cas, BinaryBundle manifests, and Win32/items.toc) with a new MeshSet."""
     cas_p = mod_dir / "Win32" / "configurations" / "layout" / "initialinstallpackage" / "cas_01.cas"
@@ -1567,6 +1630,9 @@ def patch_reskate_mod_directory(
     old_slug_b = old_slug_str.encode("latin1")
     old_disp_b = old_disp_str.encode("latin1")
 
+    lod0_guid_hex = bytes(res_out[0x00D0 + 0x84 : 0x00D0 + 0x94]).hex()
+    lod_guids = {lod0_guid_hex} | set(AUTH_LOD_CHUNKS.keys())
+
     lod_guid_map: dict[str, bytes] = {}
     if costume_id:
         clean = "".join(c for c in costume_id if c.isalnum() or c == "_")
@@ -1595,6 +1661,8 @@ def patch_reskate_mod_directory(
                 new_g = hashlib.md5(old_g + new_slug_b).digest()
                 lod_guid_map[old_g.hex()] = new_g
                 res_buf[lb + 0x84:lb + 0x94] = new_g
+                lod_guids.add(old_g.hex())
+                lod_guids.add(new_g.hex())
         res_out = bytes(res_buf).replace(old_uuid_b, new_uuid_b)
         res_cas_bytes = wrap_uncompressed_cas(res_out)
         print(
@@ -1602,17 +1670,22 @@ def patch_reskate_mod_directory(
             f"(items/cust_fullbodycostume/own_{new_slug_str}, mesh={new_uuid_str}_mesh)"
         )
 
-    lod_guids = set()
-    for lod_idx in range(6):
-        lb = 0x00D0 + lod_idx * 0x00C0
-        if lb + 0x94 <= len(res_out):
-            lod_guids.add(res_out[lb + 0x84:lb + 0x94].hex())
     if lod_guid_map:
         lod_guids.update(lod_guid_map.keys())
 
     res_sha1 = hashlib.sha1(res_out).digest()
     chunk_sha1 = hashlib.sha1(chunk_out).digest()
 
+    if os.path.getsize(cas_p) > 141466809:
+        with open(cas_p, "rb") as f_check:
+            f_check.seek(141466809 - 16)
+            if b"firstMip" in f_check.read(16):
+                with open(cas_p, "r+b") as f_trunc:
+                    f_trunc.truncate(141466809)
+                print(f"[ReSkate Mod] Truncated {cas_p.name} back to clean base (141,466,809 bytes)")
+
+    lod1_cas_off = None
+    lod1_cas_sz = None
     with open(cas_p, "ab") as f:
         res_cas_off = f.tell()
         f.write(res_cas_bytes)
@@ -1620,6 +1693,10 @@ def patch_reskate_mod_directory(
         chunk_cas_off = f.tell()
         f.write(chunk_cas_bytes)
         chunk_cas_sz = len(chunk_cas_bytes)
+        if chunk_lod1_cas_bytes is not None:
+            lod1_cas_off = f.tell()
+            f.write(chunk_lod1_cas_bytes)
+            lod1_cas_sz = len(chunk_lod1_cas_bytes)
 
     toc_paths = list(mod_dir.glob("**/Win32/items.toc"))
     for toc_p in toc_paths:
@@ -1710,8 +1787,14 @@ def patch_reskate_mod_directory(
                 w0, w1, off, sz = words[w], words[w + 1], words[w + 2], words[w + 3]
                 is_p = (((w0 << 32) | w1) >> 48) & 0xFF != 0
                 if is_p and guid_key.hex() in lod_guid_map:
-                    guid_key = lod_guid_map[guid_key.hex()]
-                    off, sz = chunk_cas_off, chunk_cas_sz
+                    orig_g = guid_key.hex()
+                    guid_key = lod_guid_map[orig_g]
+                    if orig_g == "7023b51f857abb479e3b9f116dfd69e1" and chunk_lod1_out is not None:
+                        off, sz = lod1_cas_off, lod1_cas_sz
+                    elif orig_g in AUTH_LOD_CHUNKS:
+                        off, sz = AUTH_LOD_CHUNKS[orig_g][0], AUTH_LOD_CHUNKS[orig_g][1]
+                    else:
+                        off, sz = chunk_cas_off, chunk_cas_sz
                     patched_toc_chunks += 1
                 elif is_p and guid_key.hex() in tex_chunk_guid_map:
                     guid_key = tex_chunk_guid_map[guid_key.hex()]
@@ -1728,9 +1811,17 @@ def patch_reskate_mod_directory(
                 struct.pack_into(">IIII", toc_data, w_pos, w0, w1, off, sz)
         else:
             for c in chunks:
-                if c["patch"] and c["guid"] in lod_guids:
-                    struct.pack_into(">II", toc_data, c["word_pos"] + 8, chunk_cas_off, chunk_cas_sz)
-                    patched_toc_chunks += 1
+                if c["patch"]:
+                    if c["guid"] == lod0_guid_hex:
+                        struct.pack_into(">II", toc_data, c["word_pos"] + 8, chunk_cas_off, chunk_cas_sz)
+                        patched_toc_chunks += 1
+                    elif c["guid"] == "7023b51f857abb479e3b9f116dfd69e1" and chunk_lod1_out is not None:
+                        struct.pack_into(">II", toc_data, c["word_pos"] + 8, lod1_cas_off, lod1_cas_sz)
+                        patched_toc_chunks += 1
+                    elif c["guid"] in AUTH_LOD_CHUNKS:
+                        auth_off, auth_sz = AUTH_LOD_CHUNKS[c["guid"]][0], AUTH_LOD_CHUNKS[c["guid"]][1]
+                        struct.pack_into(">II", toc_data, c["word_pos"] + 8, auth_off, auth_sz)
+                        patched_toc_chunks += 1
 
         for b in bundles:
             reg = b["region"]
@@ -1878,17 +1969,42 @@ def patch_reskate_mod_directory(
                     search_pos = found + 13
 
             chk_table_base = res_table_base + res_cnt * 36
+            inv_lod_guid_map = {v.hex(): k for k, v in lod_guid_map.items()} if costume_id else {}
             for k in range(chk_cnt):
                 c_off = chk_table_base + k * 24
                 guid_hex = bytes(man_buf[c_off:c_off + 16]).hex()
+                orig_guid_hex = inv_lod_guid_map.get(guid_hex, guid_hex)
                 asset_idx = ebx_cnt + res_cnt + k
                 file_idx = 1 + asset_idx
-                if guid_hex in lod_guids and file_idx < len(file_entries) and file_entries[file_idx][3]:
-                    if costume_id and guid_hex in lod_guid_map:
-                        man_buf[c_off:c_off + 16] = lod_guid_map[guid_hex]
-                    man_buf[36 + asset_idx * 20:36 + (asset_idx + 1) * 20] = chunk_sha1
-                    struct.pack_into(f"{endian}II", man_buf, c_off + 16, 0, len(chunk_out))
-                    struct.pack_into(">II", toc_data, file_entries[file_idx][0], chunk_cas_off, chunk_cas_sz)
+                if orig_guid_hex == lod0_guid_hex and file_idx < len(file_entries) and file_entries[file_idx][3]:
+                    if costume_id and orig_guid_hex in lod_guid_map:
+                        man_buf[c_off:c_off + 16] = lod_guid_map[orig_guid_hex]
+                    target_chk_len = len(chunk_out)
+                    target_chk_cas_off = chunk_cas_off
+                    target_chk_cas_sz = chunk_cas_sz
+                    target_chk_sha1 = hashlib.sha1(chunk_out).digest()
+                    man_buf[36 + asset_idx * 20:36 + (asset_idx + 1) * 20] = target_chk_sha1
+                    struct.pack_into(f"{endian}II", man_buf, c_off + 16, 0, target_chk_len)
+                    struct.pack_into(">II", toc_data, file_entries[file_idx][0], target_chk_cas_off, target_chk_cas_sz)
+                    modified_man = True
+                elif orig_guid_hex == "7023b51f857abb479e3b9f116dfd69e1" and chunk_lod1_out is not None and file_idx < len(file_entries) and file_entries[file_idx][3]:
+                    target_chk_len = len(chunk_lod1_out)
+                    target_chk_cas_off = lod1_cas_off
+                    target_chk_cas_sz = lod1_cas_sz
+                    target_chk_sha1 = hashlib.sha1(chunk_lod1_out).digest()
+                    if costume_id and orig_guid_hex in lod_guid_map:
+                        man_buf[c_off:c_off + 16] = lod_guid_map[orig_guid_hex]
+                    man_buf[36 + asset_idx * 20:36 + (asset_idx + 1) * 20] = target_chk_sha1
+                    struct.pack_into(f"{endian}II", man_buf, c_off + 16, 0, target_chk_len)
+                    struct.pack_into(">II", toc_data, file_entries[file_idx][0], target_chk_cas_off, target_chk_cas_sz)
+                    modified_man = True
+                elif orig_guid_hex in AUTH_LOD_CHUNKS and file_idx < len(file_entries) and file_entries[file_idx][3]:
+                    auth_off, auth_sz, raw_len, sha1_bytes = AUTH_LOD_CHUNKS[orig_guid_hex]
+                    if costume_id and orig_guid_hex in lod_guid_map:
+                        man_buf[c_off:c_off + 16] = lod_guid_map[orig_guid_hex]
+                    man_buf[36 + asset_idx * 20:36 + (asset_idx + 1) * 20] = sha1_bytes
+                    struct.pack_into(f"{endian}II", man_buf, c_off + 16, 0, raw_len)
+                    struct.pack_into(">II", toc_data, file_entries[file_idx][0], auth_off, auth_sz)
                     modified_man = True
                 elif costume_id and guid_hex in tex_chunk_guid_map and file_idx < len(file_entries) and file_entries[file_idx][3]:
                     man_buf[c_off:c_off + 16] = tex_chunk_guid_map[guid_hex]
@@ -1918,6 +2034,8 @@ def patch_reskate_mod_directory(
 
         toc_p.write_bytes(toc_data)
         print(f"[ReSkate Mod] Updated {toc_p.relative_to(mod_dir)} ({patched_toc_chunks} LOD chunk refs patched)")
+
+
 
     for mf_p in mod_dir.glob("manifest.json"):
         try:
@@ -1963,35 +2081,33 @@ def cmd_from_gltf(args):
         if not template_res_p.exists():
             raise FileNotFoundError(f"Template MeshSet resource not found: {template_res_p}")
         template_res_bytes = template_res_p.read_bytes()
-    elif args.template_mod:
-        src_mod = Path(args.template_mod)
-        toc_path = src_mod / "Win32" / "items.toc"
-        cas_path = src_mod / "Win32" / "configurations" / "layout" / "initialinstallpackage" / "cas_01.cas"
-        if toc_path.exists() and cas_path.exists():
-            bundles, _ = parse_toc_bundles_and_chunks(toc_path.read_bytes())
-            candidate_meshes = []
-            for b in bundles:
-                files, man = parse_bundle_region_and_manifest(b["region"], cas_path)
-                if man and man["resources"]:
-                    for idx, r in enumerate(man["resources"]):
-                        if r["name"].endswith("_mesh"):
-                            fi = files[1 + len(man["ebx"]) + idx]
-                            candidate_meshes.append((r["name"], fi))
-            for r_name, fi in candidate_meshes:
-                if "maincharacters/reskate/" in r_name:
-                    template_res_bytes = read_cas_slice(cas_path, fi["offset"], fi["size"])
-                    print(f"[glTF -> Frostbite] Auto-extracted costume MeshSet from {src_mod.name}: {r_name}")
-                    break
-            if not template_res_bytes and candidate_meshes:
-                template_res_bytes = read_cas_slice(cas_path, candidate_meshes[0][1]["offset"], candidate_meshes[0][1]["size"])
-                print(f"[glTF -> Frostbite] Auto-extracted fallback MeshSet from {src_mod.name}: {candidate_meshes[0][0]}")
-
-    if not template_res_bytes:
+    else:
         default_res_p = REPO_ROOT / "analysis" / "yorha2b" / "mesh_res.bin"
         if default_res_p.exists():
             template_res_bytes = default_res_p.read_bytes()
-        else:
-            raise FileNotFoundError("Could not find or extract a template MeshSet resource")
+            print(f"[glTF -> Frostbite] Using authentic MeshSet template from {default_res_p.name}")
+        elif args.template_mod:
+            src_mod = Path(args.template_mod)
+            toc_path = src_mod / "Win32" / "items.toc"
+            cas_path = src_mod / "Win32" / "configurations" / "layout" / "initialinstallpackage" / "cas_01.cas"
+            if toc_path.exists() and cas_path.exists():
+                bundles, _ = parse_toc_bundles_and_chunks(toc_path.read_bytes())
+                candidate_meshes = []
+                for b in bundles:
+                    files, man = parse_bundle_region_and_manifest(b["region"], cas_path)
+                    if man and man["resources"]:
+                        for idx, r in enumerate(man["resources"]):
+                            if r["name"].endswith("_mesh"):
+                                fi = files[1 + len(man["ebx"]) + idx]
+                                candidate_meshes.append((r["name"], fi))
+                for r_name, fi in candidate_meshes:
+                    if "maincharacters/reskate/" in r_name:
+                        template_res_bytes = read_cas_slice(cas_path, fi["offset"], fi["size"])
+                        print(f"[glTF -> Frostbite] Auto-extracted costume MeshSet from {src_mod.name}: {r_name}")
+                        break
+                if not template_res_bytes and candidate_meshes:
+                    template_res_bytes = read_cas_slice(cas_path, candidate_meshes[0][1]["offset"], candidate_meshes[0][1]["size"])
+                    print(f"[glTF -> Frostbite] Auto-extracted fallback MeshSet from {src_mod.name}: {candidate_meshes[0][0]}")
 
     template_chunk_bytes = None
     if args.template_chunk:
@@ -2059,7 +2175,7 @@ def cmd_from_gltf(args):
         print(
             f"[glTF -> Frostbite] Wrote Frostbite MeshSet to {out_dir}:\n"
             f"  - {res_out_p.name} ({len(res_out):,} B raw / {len(res_cas_bytes):,} B .cas)\n"
-            f"  - {chunk_out_p.name} ({len(chunk_out):,} B raw / {len(chunk_cas_bytes):,} B .cas)"
+            f"  - {chunk_out_p.name} (LOD0..5 56B: {len(chunk_out):,} B raw / {len(chunk_cas_bytes):,} B .cas)"
         )
 
         target_mod_dir = None
