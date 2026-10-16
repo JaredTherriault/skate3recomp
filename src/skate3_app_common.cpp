@@ -374,10 +374,161 @@ std::filesystem::path DefaultRoamingUserRoot() {
   return DefaultDocumentsUserRoot();
 }
 
-std::filesystem::path ResolveSkate3UserRoot(const rex::PathConfig& paths) {
+std::filesystem::path ResolvePortableRoot() {
+  const char* env_root = std::getenv("SKATE3_PORTABLE_ROOT");
+  if (!env_root || !*env_root) {
+    env_root = std::getenv("SKATE3_USER_ROOT");
+  }
+  if (env_root && *env_root) {
+    std::filesystem::path p(env_root);
+    std::error_code ec;
+    if (std::filesystem::is_directory(p, ec)) {
+      return p;
+    }
+  }
+
   const auto executable_root = rex::filesystem::GetAppRootFolder();
-  if (std::filesystem::exists(executable_root / "portable.txt")) {
+  std::error_code ec;
+
+  // 1. Direct check in executable directory
+  if (std::filesystem::exists(executable_root / "portable.txt", ec) ||
+      std::filesystem::is_directory(executable_root / std::string(kSavesDirectoryName), ec)) {
     return executable_root;
+  }
+
+  // 2. Parent directory check (e.g. running from build/, build-win/, bin/)
+  const auto parent_root = executable_root.parent_path();
+  if (!parent_root.empty() && parent_root != executable_root) {
+    if (std::filesystem::exists(parent_root / "portable.txt", ec) ||
+        std::filesystem::is_directory(parent_root / std::string(kSavesDirectoryName), ec)) {
+      return parent_root;
+    }
+  }
+
+  return {};
+}
+
+void MigrateUserDataToPortableRoot(const std::filesystem::path& portable_root) {
+  if (portable_root.empty()) {
+    return;
+  }
+
+  std::error_code ec;
+  const auto portable_saves = portable_root / std::string(kSavesDirectoryName);
+  std::filesystem::create_directories(portable_saves, ec);
+
+  // Candidate legacy user roots to migrate from
+  const std::vector<std::filesystem::path> source_candidates = {
+      DefaultRoamingUserRoot(),
+      DefaultDocumentsUserRoot(),
+      portable_root,  // In case unflattened saves exist in portable root
+  };
+
+  for (const auto& source_root : source_candidates) {
+    if (source_root.empty() || !std::filesystem::exists(source_root, ec)) {
+      continue;
+    }
+
+    const bool is_self = std::filesystem::equivalent(source_root, portable_root, ec);
+    ec.clear();
+
+    if (!is_self) {
+      // 1. Settings
+      const auto src_settings = source_root / std::string(kSettingsFilename);
+      const auto dst_settings = portable_root / std::string(kSettingsFilename);
+      if (std::filesystem::exists(src_settings, ec) && !std::filesystem::exists(dst_settings, ec)) {
+        std::filesystem::copy_file(src_settings, dst_settings, std::filesystem::copy_options::skip_existing, ec);
+        REXLOG_INFO("Migrated settings: {} -> {}", src_settings.string(), dst_settings.string());
+      }
+      ec.clear();
+
+      // 2. Profiles (profiles.toml & player_achievements.json)
+      const auto src_profiles_dir = source_root / "profiles";
+      const auto dst_profiles_dir = portable_root / "profiles";
+      if (std::filesystem::is_directory(src_profiles_dir, ec)) {
+        std::filesystem::create_directories(dst_profiles_dir, ec);
+        const auto src_profiles_file = src_profiles_dir / "profiles.toml";
+        const auto dst_profiles_file = dst_profiles_dir / "profiles.toml";
+        if (std::filesystem::exists(src_profiles_file, ec) && !std::filesystem::exists(dst_profiles_file, ec)) {
+          std::filesystem::copy_file(src_profiles_file, dst_profiles_file, std::filesystem::copy_options::skip_existing, ec);
+          REXLOG_INFO("Migrated profiles.toml: {} -> {}", src_profiles_file.string(), dst_profiles_file.string());
+        }
+        ec.clear();
+
+        auto copy_ach_files = [&](const std::filesystem::path& dir) {
+          if (!std::filesystem::is_directory(dir, ec)) return;
+          for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".json") {
+              const auto dst_file = dst_profiles_dir / entry.path().filename();
+              if (!std::filesystem::exists(dst_file, ec)) {
+                std::filesystem::copy_file(entry.path(), dst_file, std::filesystem::copy_options::skip_existing, ec);
+                REXLOG_INFO("Migrated achievement file: {} -> {}", entry.path().string(), dst_file.string());
+              }
+              const auto dst_nested_dir = dst_profiles_dir / "profiles";
+              std::filesystem::create_directories(dst_nested_dir, ec);
+              const auto dst_nested_file = dst_nested_dir / entry.path().filename();
+              if (!std::filesystem::exists(dst_nested_file, ec)) {
+                std::filesystem::copy_file(entry.path(), dst_nested_file, std::filesystem::copy_options::skip_existing, ec);
+              }
+            }
+          }
+        };
+        copy_ach_files(src_profiles_dir);
+        copy_ach_files(src_profiles_dir / "profiles");
+      }
+      ec.clear();
+
+      // 3. DLC packages (0000000000000000/454108E6/00000002/...)
+      const auto src_dlc_dir = source_root / "0000000000000000";
+      const auto dst_dlc_dir = portable_root / "0000000000000000";
+      if (std::filesystem::is_directory(src_dlc_dir, ec) && !std::filesystem::exists(dst_dlc_dir, ec)) {
+        std::filesystem::copy(src_dlc_dir, dst_dlc_dir,
+                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+        REXLOG_INFO("Migrated DLC content: {} -> {}", src_dlc_dir.string(), dst_dlc_dir.string());
+      }
+      ec.clear();
+    }
+
+    // 4. Save game packages (ALIAS_SKATER, CFOTO_SKATER, etc.)
+    // Standard unflattened layout: <source_root>/<xuid>/454108E6/00000001/<save_name>/
+    // Headers:                    <source_root>/<xuid>/454108E6/Headers/00000001/<save_name>.header
+    for (const auto& xuid_entry : std::filesystem::directory_iterator(source_root, ec)) {
+      if (!xuid_entry.is_directory(ec)) continue;
+      const std::string xuid_name = xuid_entry.path().filename().string();
+      if (xuid_name.size() != 16 || xuid_name == "0000000000000000") continue;
+
+      const auto title_saves_dir = xuid_entry.path() / "454108E6" / "00000001";
+      const auto title_headers_dir = xuid_entry.path() / "454108E6" / "Headers" / "00000001";
+
+      if (std::filesystem::is_directory(title_saves_dir, ec)) {
+        for (const auto& save_entry : std::filesystem::directory_iterator(title_saves_dir, ec)) {
+          if (!save_entry.is_directory(ec)) continue;
+          const std::string save_name = save_entry.path().filename().string();
+          const auto dst_save_dir = portable_saves / xuid_name / save_name;
+          if (!std::filesystem::exists(dst_save_dir, ec)) {
+            std::filesystem::create_directories(dst_save_dir, ec);
+            std::filesystem::copy(save_entry.path(), dst_save_dir,
+                                  std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+            REXLOG_INFO("Migrated save package: {} -> {}", save_entry.path().string(), dst_save_dir.string());
+          }
+          const auto src_header = title_headers_dir / (save_name + ".header");
+          const auto dst_header = portable_saves / xuid_name / "Headers" / (save_name + ".header");
+          if (std::filesystem::exists(src_header, ec) && !std::filesystem::exists(dst_header, ec)) {
+            std::filesystem::create_directories(dst_header.parent_path(), ec);
+            std::filesystem::copy_file(src_header, dst_header, std::filesystem::copy_options::skip_existing, ec);
+            REXLOG_INFO("Migrated save header: {} -> {}", src_header.string(), dst_header.string());
+          }
+        }
+      }
+    }
+  }
+}
+
+std::filesystem::path ResolveSkate3UserRoot(const rex::PathConfig& paths) {
+  const auto portable_root = ResolvePortableRoot();
+  if (!portable_root.empty()) {
+    MigrateUserDataToPortableRoot(portable_root);
+    return portable_root;
   }
 
   const auto old_default = DefaultDocumentsUserRoot();
@@ -824,13 +975,14 @@ void Skate3BaseApp::OnPostSetup() {
   if (std::getenv("SKATE3_DISABLE_BIG_ALIASES") == nullptr) {
     InstallBigDeviceAliases();
   }
-  // Portable saves: a "saves" folder next to the executable takes over
-  // saved-game content when it exists (launcher-managed installs). Layout is
-  // flattened to saves/<xuid>/<save>; nothing is migrated from the user
-  // content tree, and without the folder the default location is unchanged.
+  // Portable saves: a "saves" folder next to the executable (or in portable root)
+  // takes over saved-game content when it exists (launcher-managed installs).
+  // Layout is flattened to saves/<xuid>/<save>.
   {
-    const auto portable_saves =
-        rex::filesystem::GetAppRootFolder() / std::string(kSavesDirectoryName);
+    const auto portable_root = ResolvePortableRoot();
+    const auto portable_saves = (!portable_root.empty())
+        ? (portable_root / std::string(kSavesDirectoryName))
+        : (rex::filesystem::GetAppRootFolder() / std::string(kSavesDirectoryName));
     if (std::filesystem::is_directory(portable_saves) && runtime()->kernel_state() &&
         runtime()->kernel_state()->content_manager()) {
       runtime()->kernel_state()->content_manager()->SetContentTypeRoot(

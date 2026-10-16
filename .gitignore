@@ -19,6 +19,14 @@
 skate3.toml
 skate3_ultrawide_targets*.toml
 CMakeUserPresets.json
+portable.txt
+/saves/
+/profiles/
+/cache/
+settings.toml
+/0000000000000000/
+/[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]*/
+
 
 # Diagnostics and binary build products
 *.log
