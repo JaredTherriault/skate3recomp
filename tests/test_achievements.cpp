@@ -718,10 +718,24 @@ int main() {
     mgr.ResetAchievements();
 
     // 6.1: Flip Trick Encyclopedia (14 flip tricks)
-    // Verify negative collision prevention first:
-    // Landing "Varial Kickflip" must check off "Varial Kickflip" ONLY, NOT "Kickflip"!
-    // Landing "FS Pop Shuvit" must check off "FS Pop Shuvit" ONLY, NOT "Pop Shuvit"!
+    // Landing "Varial Kickflip" must post a progress toast with item="Varial Kickflip", parent="Flip Trick Encyclopedia", 1/14
     mgr.OnTrickLanded("Varial Kickflip");
+    {
+      const auto ptoast = toast_dialog.current_progress_toast();
+      TEST_CHECK(ptoast.has_value(), "Landing a new checklist trick must post a progress toast");
+      TEST_CHECK(ptoast->item_name == "Varial Kickflip", "Progress toast must display the landed trick name");
+      TEST_CHECK(ptoast->parent_name == "Flip Trick Encyclopedia", "Progress toast must display parent goal");
+      TEST_CHECK(ptoast->current_count == 1 && ptoast->total_count == 14, "Progress toast must show 1/14");
+    }
+
+    // Landing "Varial Kickflip" a second time must NOT duplicate or increment progress
+    mgr.OnTrickLanded("Varial Kickflip");
+    {
+      const auto ptoast = toast_dialog.current_progress_toast();
+      TEST_CHECK(ptoast && ptoast->current_count == 1, "Duplicate trick must not increment progress count");
+    }
+
+    // Landing "FS Pop Shuvit" must check off "FS Pop Shuvit" ONLY, NOT "Pop Shuvit"!
     mgr.OnTrickLanded("FS Pop Shuvit");
     {
       const auto data = mgr.GetAchievementData();

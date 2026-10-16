@@ -65,17 +65,31 @@ struct AchievementToastItem {
   uint32_t gamerscore = 0;
 };
 
+struct AchievementProgressToastItem {
+  uint32_t achievement_id = 0;
+  std::string item_name;      // e.g. "Kickflip"
+  std::string parent_name;    // e.g. "Flip Trick Encyclopedia"
+  uint32_t current_count = 0; // e.g. 1
+  uint32_t total_count = 0;   // e.g. 14
+};
+
 class AchievementToastDialog final : public rex::ui::ImGuiDialog {
  public:
   explicit AchievementToastDialog(rex::ui::ImGuiDrawer* drawer);
   ~AchievementToastDialog() override = default;
 
   void PostToast(const AchievementToastItem& item);
+  void PostProgressToast(const AchievementProgressToastItem& item);
+  void Clear();
   void SetAchievementManager(AchievementManager* manager) { manager_ = manager; }
   rex::ui::ImGuiDrawer* imgui_drawer() const { return rex::ui::ImGuiDialog::imgui_drawer(); }
   std::optional<AchievementToastItem> current_toast() const {
     std::lock_guard lock(mutex_);
     return current_;
+  }
+  std::optional<AchievementProgressToastItem> current_progress_toast() const {
+    std::lock_guard lock(mutex_);
+    return current_progress_;
   }
 
  protected:
@@ -88,6 +102,13 @@ class AchievementToastDialog final : public rex::ui::ImGuiDialog {
   std::optional<AchievementToastItem> current_;
   std::chrono::steady_clock::time_point start_time_;
   bool is_active_ = false;
+
+  // Separate, shorter queue for fraction progress notifications
+  std::deque<AchievementProgressToastItem> progress_queue_;
+  std::optional<AchievementProgressToastItem> current_progress_;
+  std::chrono::steady_clock::time_point progress_start_time_;
+  bool is_progress_active_ = false;
+
   AchievementManager* manager_ = nullptr;
 };
 

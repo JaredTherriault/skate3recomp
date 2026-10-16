@@ -392,9 +392,30 @@ void AchievementToastDialog::PostToast(const AchievementToastItem& item) {
   }
 }
 
+void AchievementToastDialog::PostProgressToast(const AchievementProgressToastItem& item) {
+  std::lock_guard lock(mutex_);
+  progress_queue_.push_back(item);
+  if (!is_progress_active_) {
+    is_progress_active_ = true;
+    current_progress_ = progress_queue_.front();
+    progress_queue_.pop_front();
+    progress_start_time_ = std::chrono::steady_clock::now();
+  }
+}
+
+void AchievementToastDialog::Clear() {
+  std::lock_guard lock(mutex_);
+  queue_.clear();
+  current_.reset();
+  is_active_ = false;
+  progress_queue_.clear();
+  current_progress_.reset();
+  is_progress_active_ = false;
+}
+
 bool AchievementToastDialog::WantsContinuousRepaint() const {
   std::lock_guard lock(mutex_);
-  if (is_active_ || !queue_.empty()) {
+  if (is_active_ || !queue_.empty() || is_progress_active_ || !progress_queue_.empty()) {
     return true;
   }
   if (manager_ && manager_->HasActiveTelemetryTriggers()) {
@@ -409,34 +430,45 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
   }
 
   std::lock_guard lock(mutex_);
-  if (!is_active_) {
+  const auto now = std::chrono::steady_clock::now();
+  const float s = std::clamp(io.DisplaySize.y / 1080.0f, 0.6f, 2.5f);
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  if (!dl) {
     return;
   }
+  ImFont* bold = imgui_drawer()->ui_font_semibold() ? imgui_drawer()->ui_font_semibold() : ImGui::GetFont();
+  ImFont* reg = imgui_drawer()->ui_font() ? imgui_drawer()->ui_font() : ImGui::GetFont();
 
-  const auto now = std::chrono::steady_clock::now();
-  float elapsed = std::chrono::duration<float>(now - start_time_).count();
-
-  constexpr float kEnterDuration = 0.4f;
-  constexpr float kHoldDuration = 4.0f;
-  constexpr float kExitDuration = 0.6f;
-  constexpr float kTotalDuration = kEnterDuration + kHoldDuration + kExitDuration;
-
-  if (elapsed >= kTotalDuration) {
-    if (!queue_.empty()) {
+  // ============================================================================
+  // 1. Full Achievement Unlock Toast (bottom-center, ~4 seconds)
+  // ============================================================================
+  if (is_active_ || !queue_.empty()) {
+    if (!is_active_ && !queue_.empty()) {
+      is_active_ = true;
       current_ = queue_.front();
       queue_.pop_front();
       start_time_ = now;
-      elapsed = 0.0f;
-    } else {
-      is_active_ = false;
-      current_.reset();
-      return;
     }
-  }
 
-  if (!current_) {
-    return;
-  }
+    constexpr float kEnterDuration = 0.4f;
+    constexpr float kHoldDuration = 4.0f;
+    constexpr float kExitDuration = 0.6f;
+    constexpr float kTotalDuration = kEnterDuration + kHoldDuration + kExitDuration;
+
+    float elapsed = std::chrono::duration<float>(now - start_time_).count();
+    if (elapsed >= kTotalDuration) {
+      if (!queue_.empty()) {
+        current_ = queue_.front();
+        queue_.pop_front();
+        start_time_ = now;
+        elapsed = 0.0f;
+      } else {
+        is_active_ = false;
+        current_.reset();
+      }
+    }
+
+    if (current_) {
 
   float alpha = 1.0f;
   float y_offset = 0.0f;
@@ -622,6 +654,138 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
     dl->AddText(reg, desc_size,
                 ImVec2(text_x0, card_y0 + 67.0f * s),
                 desc_col, desc_line2.c_str());
+  }
+}
+}
+
+  // ============================================================================
+  // 2. Fractional Progress Toast on the Side of the Screen (~2 seconds)
+  // ============================================================================
+  if (is_progress_active_ || !progress_queue_.empty()) {
+    if (!is_progress_active_ && !progress_queue_.empty()) {
+      is_progress_active_ = true;
+      current_progress_ = progress_queue_.front();
+      progress_queue_.pop_front();
+      progress_start_time_ = now;
+    }
+
+    constexpr float kProgEnter = 0.20f;
+    constexpr float kProgHold = 2.00f;
+    constexpr float kProgExit = 0.30f;
+    constexpr float kProgTotal = kProgEnter + kProgHold + kProgExit;
+
+    const float p_elapsed = std::chrono::duration<float>(now - progress_start_time_).count();
+    if (p_elapsed >= kProgTotal) {
+      if (!progress_queue_.empty()) {
+        current_progress_ = progress_queue_.front();
+        progress_queue_.pop_front();
+        progress_start_time_ = now;
+      } else {
+        is_progress_active_ = false;
+        current_progress_.reset();
+      }
+    } else if (current_progress_) {
+      float p_alpha = 1.0f;
+      float p_x_offset = 0.0f;
+
+      if (p_elapsed < kProgEnter) {
+        const float t = p_elapsed / kProgEnter;
+        const float e = 1.0f - std::pow(1.0f - t, 3.0f);
+        p_alpha = std::clamp(t * 1.5f, 0.0f, 1.0f);
+        p_x_offset = (1.0f - e) * 60.0f * s;  // slide in from right edge
+      } else if (p_elapsed > kProgEnter + kProgHold) {
+        const float t = (p_elapsed - (kProgEnter + kProgHold)) / kProgExit;
+        const float e = t * t;
+        p_alpha = std::clamp(1.0f - t, 0.0f, 1.0f);
+        p_x_offset = e * 60.0f * s;            // slide out to right
+      }
+
+      const float p_card_w = 320.0f * s;
+      const float p_card_h = 74.0f * s;
+      const float p_card_x1 = io.DisplaySize.x - 24.0f * s + p_x_offset;
+      const float p_card_x0 = p_card_x1 - p_card_w;
+      const float p_card_y0 = io.DisplaySize.y * 0.44f - p_card_h * 0.5f;
+      const float p_card_y1 = p_card_y0 + p_card_h;
+      const float p_radius = 8.0f * s;
+
+      const ImU32 p_bg_col = IM_COL32(10, 14, 16, static_cast<int>(238 * p_alpha));
+      const ImU32 p_border_col = IM_COL32(213, 235, 10, static_cast<int>(220 * p_alpha));
+      const ImU32 p_shadow_col = IM_COL32(0, 0, 0, static_cast<int>(140 * p_alpha));
+
+      // Drop shadow
+      dl->AddRectFilled(ImVec2(p_card_x0 - 2.0f * s, p_card_y0 + 3.0f * s),
+                        ImVec2(p_card_x1 + 2.0f * s, p_card_y1 + 5.0f * s),
+                        p_shadow_col, p_radius + 2.0f * s);
+
+      // Card background & border
+      dl->AddRectFilled(ImVec2(p_card_x0, p_card_y0), ImVec2(p_card_x1, p_card_y1),
+                        p_bg_col, p_radius);
+      dl->AddRect(ImVec2(p_card_x0, p_card_y0), ImVec2(p_card_x1, p_card_y1),
+                  p_border_col, p_radius, 0, 1.5f * s);
+
+      // Icon on left (if available)
+      void* p_icon_tex = manager_ ? manager_->GetAchievementIcon(current_progress_->achievement_id) : nullptr;
+      float p_text_x0 = p_card_x0 + 16.0f * s;
+      if (p_icon_tex) {
+        const float p_icon_sz = 40.0f * s;
+        const float p_icon_x0 = p_card_x0 + 12.0f * s;
+        const float p_icon_y0 = (p_card_y0 + p_card_y1) * 0.5f - p_icon_sz * 0.5f;
+        dl->AddImageRounded(reinterpret_cast<ImTextureID>(p_icon_tex),
+                            ImVec2(p_icon_x0, p_icon_y0),
+                            ImVec2(p_icon_x0 + p_icon_sz, p_icon_y0 + p_icon_sz),
+                            ImVec2(0, 0), ImVec2(1, 1),
+                            IM_COL32(255, 255, 255, static_cast<int>(255 * p_alpha)),
+                            6.0f * s);
+        dl->AddRect(ImVec2(p_icon_x0, p_icon_y0),
+                    ImVec2(p_icon_x0 + p_icon_sz, p_icon_y0 + p_icon_sz),
+                    p_border_col, 6.0f * s, 0, 1.0f * s);
+        p_text_x0 = p_icon_x0 + p_icon_sz + 12.0f * s;
+      }
+      const float p_text_x1 = p_card_x1 - 16.0f * s;
+
+      // Line 1: Item name (left) + fraction count (right)
+      const float item_font_sz = 14.0f * s;
+      const std::string count_str = fmt::format("{} / {}", current_progress_->current_count, current_progress_->total_count);
+      const ImVec2 count_extent = bold->CalcTextSizeA(item_font_sz, FLT_MAX, 0.0f, count_str.c_str());
+      const float count_x0 = p_text_x1 - count_extent.x;
+
+      dl->AddText(bold, item_font_sz,
+                  ImVec2(count_x0, p_card_y0 + 10.0f * s),
+                  IM_COL32(213, 235, 10, static_cast<int>(255 * p_alpha)), count_str.c_str());
+
+      std::string trunc_item = current_progress_->item_name;
+      const float max_item_w = std::max(40.0f * s, count_x0 - p_text_x0 - 8.0f * s);
+      while (!trunc_item.empty() && bold->CalcTextSizeA(item_font_sz, FLT_MAX, 0.0f, trunc_item.c_str()).x > max_item_w) {
+        trunc_item.pop_back();
+      }
+      dl->AddText(bold, item_font_sz,
+                  ImVec2(p_text_x0, p_card_y0 + 10.0f * s),
+                  IM_COL32(250, 252, 252, static_cast<int>(255 * p_alpha)), trunc_item.c_str());
+
+      // Line 2: Progress bar
+      const float bar_y0 = p_card_y0 + 32.0f * s;
+      const float bar_y1 = bar_y0 + 6.0f * s;
+      const float bar_w = p_text_x1 - p_text_x0;
+      const float frac = current_progress_->total_count > 0
+                             ? std::clamp(static_cast<float>(current_progress_->current_count) /
+                                              static_cast<float>(current_progress_->total_count),
+                                          0.0f, 1.0f)
+                             : 0.0f;
+      // Track
+      dl->AddRectFilled(ImVec2(p_text_x0, bar_y0), ImVec2(p_text_x1, bar_y1),
+                        IM_COL32(32, 40, 44, static_cast<int>(220 * p_alpha)), 3.0f * s);
+      // Fill
+      if (frac > 0.0f) {
+        dl->AddRectFilled(ImVec2(p_text_x0, bar_y0), ImVec2(p_text_x0 + bar_w * frac, bar_y1),
+                          IM_COL32(213, 235, 10, static_cast<int>(255 * p_alpha)), 3.0f * s);
+      }
+
+      // Line 3: Parent achievement name
+      const float parent_font_sz = 12.0f * s;
+      dl->AddText(reg, parent_font_sz,
+                  ImVec2(p_text_x0, p_card_y0 + 46.0f * s),
+                  IM_COL32(180, 190, 195, static_cast<int>(235 * p_alpha)), current_progress_->parent_name.c_str());
+    }
   }
 }
 
@@ -1496,6 +1660,13 @@ void AchievementManager::OnSpotCompleted(const std::string& spot_key, bool kille
           rec112.completed_tricks.end()) {
         rec112.completed_tricks.push_back(norm_spot);
         SaveAchievements();
+        if (rec112.completed_tricks.size() < 16) {
+          if (toast_dialog_) {
+            toast_dialog_->PostProgressToast(
+                {112, killed ? "Spot Killed" : "Spot Owned", "King of the Streets",
+                 static_cast<uint32_t>(rec112.completed_tricks.size()), 16});
+          }
+        }
       }
       if (rec112.completed_tricks.size() >= 16) {
         UnlockInternal(0, 112);
@@ -1667,6 +1838,13 @@ void AchievementManager::OnTrickLanded(std::string_view trick_name) {
           if (!already_done) {
             rec.completed_tricks.push_back(req);
             dirty_progress = true;
+            if (rec.completed_tricks.size() < def.required_tricks.size()) {
+              if (toast_dialog_) {
+                toast_dialog_->PostProgressToast(
+                    {def.id, req, def.name, static_cast<uint32_t>(rec.completed_tricks.size()),
+                     static_cast<uint32_t>(def.required_tricks.size())});
+              }
+            }
           }
         }
       }
@@ -1728,6 +1906,9 @@ void AchievementManager::ResetAchievements() {
   g_reset_epoch.fetch_add(1, std::memory_order_relaxed);
   if (!g_has_real_hud_gate.load(std::memory_order_relaxed)) {
     g_local_skater_ptr.store(0, std::memory_order_relaxed);
+  }
+  if (toast_dialog_) {
+    toast_dialog_->Clear();
   }
 
   const auto path = GetAchievementFilePath(active_profile_id_);
