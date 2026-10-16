@@ -294,15 +294,11 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
   }
 
   // --- 3. Grabs & Airs (14) ---
-  if (n.find("indy") != std::string::npos || n.find("fsair") != std::string::npos ||
-      n.find("frontsideair") != std::string::npos || n.find("fsgrab") != std::string::npos ||
-      (n.find("front") != std::string::npos && n.find("air") != std::string::npos)) {
+  if (n.find("indy") != std::string::npos || n.find("fsgrab") != std::string::npos) {
     add("Indy");
   }
   if (n.find("melon") != std::string::npos || n.find("melan") != std::string::npos ||
-      n.find("bsair") != std::string::npos || n.find("backsideair") != std::string::npos ||
-      n.find("bsgrab") != std::string::npos ||
-      (n.find("back") != std::string::npos && n.find("air") != std::string::npos)) {
+      n.find("melancholy") != std::string::npos || n.find("bsgrab") != std::string::npos) {
     add("Melon");
   }
   if (n.find("mute") != std::string::npos || n.find("weddle") != std::string::npos) {
