@@ -97,6 +97,14 @@ bool IsSkaterAirborneOrGrinding() {
   return g_skater_airborne || g_skater_grinding;
 }
 
+bool IsSkaterGrinding() {
+  return g_skater_grinding;
+}
+
+void NotifySkaterGrinding() {
+  g_skater_grinding = true;
+}
+
 bool IsSkaterBailedOrOffBoard() {
   return g_skater_bailed_or_off;
 }
@@ -191,6 +199,10 @@ static const rex::ui::SimpleAchievementItem* FindUiItem(
 
 int main() {
   std::cout << "=== Skate 3 Achievement Popping & Checklist Test Suite ===\n";
+
+  // Suppress audio during test execution
+  using namespace skate3;
+  REXCVAR_SET(achievement_sound, false);
 
   // Set up an isolated temporary directory for profile persistence
   const auto temp_dir = std::filesystem::temp_directory_path() / "skate3_ach_tests";
@@ -581,27 +593,28 @@ int main() {
     SetSkaterState(415.0f, 69.0f, -210.0f, false, false);
     mgr.Update(0.05f);
     std::this_thread::sleep_for(std::chrono::milliseconds(170));
-    SetSkaterState(415.0f, 65.0f, -181.0f, false, false);
+    SetSkaterState(145.0f, 65.0f, -181.0f, false, false);
     mgr.Update(0.05f);
     TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
                "sample_gap must NOT unlock by rolling on the ground down the stairs");
 
-    // Negative test 2: start grind, but touch ground in the middle of the stairs
+    // Negative test 2: start grind, but stay on ground in the middle of the stairs (> 0.6s grace)
     SetSkaterStateGrind(415.0f, 69.0f, -210.0f, true, false);
     mgr.Update(0.05f);
-    SetSkaterState(415.0f, 67.0f, -195.0f, false, false);  // touched ground in the middle!
+    SetSkaterState(280.0f, 67.0f, -195.0f, false, false);  // touched ground in the middle!
     mgr.Update(0.05f);
-    std::this_thread::sleep_for(std::chrono::milliseconds(170));
-    SetSkaterStateGrind(415.0f, 65.0f, -181.0f, true, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    mgr.Update(0.05f);
+    SetSkaterStateGrind(145.0f, 65.0f, -181.0f, true, false);
     mgr.Update(0.05f);
     TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
-               "sample_gap must NOT unlock if skater touches ground in the middle of the stairs");
+               "sample_gap must NOT unlock if skater stays on ground in the middle of the stairs");
 
     // Positive test: grind the rail from top to bottom without touching ground
     SetSkaterStateGrind(415.0f, 69.0f, -210.0f, true, false);
     mgr.Update(0.05f);
     std::this_thread::sleep_for(std::chrono::milliseconds(170));
-    SetSkaterStateGrind(415.0f, 65.0f, -181.0f, true, false);
+    SetSkaterStateGrind(145.0f, 65.0f, -181.0f, true, false);
     mgr.Update(0.05f);
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
                "sample_gap should unlock after continuous grind down the stair set");
@@ -784,15 +797,15 @@ int main() {
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_flip_master"),
                "sample_flip_master (Flip Trick Encyclopedia) should unlock at 14/14 flip tricks");
 
-    // 6.2: Grind & Slide Connoisseur (17 grinds/slides)
+    // 6.2: Grind & Slide Connoisseur (16 grinds/slides)
     // Verify "Noseblunt" does NOT falsely mark "Bluntslide", and "Overcrook" does NOT mark "Crooked"
     mgr.OnTrickLanded("FSNosebluntslide");
     mgr.OnTrickLanded("BSOvercrook");
     {
       const auto data = mgr.GetAchievementData();
       const auto* grind_item = FindUiItem(data, "Grind & Slide Connoisseur");
-      TEST_CHECK(grind_item && grind_item->progress_total == 17 && grind_item->progress_current == 2,
-                 "Grind & Slide Connoisseur should be at 2/17");
+      TEST_CHECK(grind_item && grind_item->progress_total == 16 && grind_item->progress_current == 2,
+                 "Grind & Slide Connoisseur should be at 2/16");
       for (const auto& [t_name, done] : grind_item->checklist) {
         if (t_name == "Noseblunt" || t_name == "Overcrook") {
           TEST_CHECK(done, t_name + " should be checked off");
@@ -802,21 +815,21 @@ int main() {
       }
     }
     const std::vector<std::string> remaining_grinds = {
-        "FS5050", "BS50", "FSNosegrind", "FSCrooked", "BSSmith", "FSFeeble",
-        "BSWilly", "FSSuski", "FSBoardslide", "BSLipslide", "FSNoseslide",
-        "BSTailslide", "FSBluntslide", "FSDarkslide", "TailblockSlide",
+        "FS 50-50", "BS 5-0 Grind", "FS Nosegrind", "FS Crook", "BS Smith", "FS Feeble",
+        "BS Willy", "FS Suski", "FS Boardslide", "BS Lipslide", "FS Noseslide",
+        "BS Tailslide", "FS Bluntslide", "FS Darkslide",
     };
     for (const auto& t : remaining_grinds) {
       mgr.OnTrickLanded(t);
     }
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_grind_master"),
-               "sample_grind_master (Grind & Slide Connoisseur) should unlock at 17/17 grinds");
+               "sample_grind_master (Grind & Slide Connoisseur) should unlock at 16/16 grinds");
 
     // 6.3: Airtime Acrobat (14 grabs & airs)
     const std::vector<std::string> all_grabs = {
-        "IndyBone", "MelonTweak", "MuteB2B", "Stalefish", "Tailgrab",
-        "Nosegrab", "Method", "Mute2Japan", "Nose2Rocket", "NoHand2ChristAir",
-        "NoHand2Superdude", "Tail2Benihana", "Nose2Airwalk", "Tail2Tailwalk",
+        "FS Indy", "BS Melon", "FS Mute", "BS Stalefish", "Tailgrab",
+        "Nosegrab", "FS Method", "BS Japan", "Rocket Air", "Christ Air",
+        "Superdude", "BS Benihana", "FS Airwalk", "BS Tailwalk",
     };
     for (size_t i = 0; i < all_grabs.size(); ++i) {
       TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_grab_master"),
@@ -843,8 +856,8 @@ int main() {
       }
     }
     const std::vector<std::string> remaining_other = {
-        "Manual", "MillerFlip", "FSBeanplant", "Judo", "HippyJump180",
-        "FSPowerslide", "BSRevert", "FSWallie", "KickflipFingerflip",
+        "Manual", "FS Invert", "BS Footplant", "FS Boneless", "Hippy Jump 180",
+        "Powerslide 180", "BS Revert", "FS Wallride", "Kickflip Fingerflip",
     };
     for (const auto& t : remaining_other) {
       mgr.OnTrickLanded(t);

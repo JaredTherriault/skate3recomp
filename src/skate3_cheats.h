@@ -37,5 +37,7 @@ int32_t GetCurrentPlayerState();
 bool IsSkaterOnBoardAirborne();
 bool IsSkaterBailedOrOffBoard();
 bool IsSkaterAirborneOrGrinding();
+bool IsSkaterGrinding();
+void NotifySkaterGrinding();
 
 }  // namespace skate3

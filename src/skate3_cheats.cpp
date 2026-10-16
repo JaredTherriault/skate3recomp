@@ -1357,9 +1357,24 @@ bool IsSkaterBailedOrOffBoard() {
     return g_current_player_state >= 500;
 }
 
+static std::atomic<uint64_t> g_last_grind_time_ms{0};
+
+void NotifySkaterGrinding() {
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    g_last_grind_time_ms.store(now_ms, std::memory_order_relaxed);
+}
+
+bool IsSkaterGrinding() {
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto last = g_last_grind_time_ms.load(std::memory_order_relaxed);
+    return (now_ms - last) < 350; // Active if GrindTracker ticked within 350ms
+}
+
 bool IsSkaterAirborneOrGrinding() {
     const int32_t state = g_current_player_state;
-    return (state >= 200 && state < 500) || g_onboard_in_air;
+    return (state >= 200 && state < 500) || g_onboard_in_air || IsSkaterGrinding();
 }
 
 namespace cheats {

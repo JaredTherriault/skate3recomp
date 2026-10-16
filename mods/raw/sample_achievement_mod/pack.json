@@ -38,12 +38,12 @@
       "gamerscore": 50,
       "id": "sample_gap",
       "landing": [
-        415.0,
+        145.0,
         65.0,
         -181.0
       ],
       "name": "The Stairway Flight",
-      "radius": 6.5,
+      "radius": 15.0,
       "takeoff": [
         415.0,
         69.0,

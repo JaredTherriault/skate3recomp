@@ -146,7 +146,7 @@ std::vector<std::string> GetTrickGroupTricks(std::string_view group_name) {
         "50-50",      "5-0",       "Nosegrind",  "Crooked",    "Overcrook",
         "Smith",      "Feeble",    "Willy",      "Salad",      "Boardslide",
         "Lipslide",   "Noseslide", "Tailslide",  "Bluntslide", "Noseblunt",
-        "Darkslide",  "Crail Slide",
+        "Darkslide",
     };
   }
   if (g == "grabs" || g == "grabsairs" || g == "grab" || g == "airs") {
@@ -180,195 +180,204 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
   };
 
   // --- 1. Flip Tricks (14) ---
-  if (n == "ollie" || n == "nollie" || n == "bonedollie" || n == "bonednollie") {
+  if (n.find("ollie") != std::string::npos || n.find("nollie") != std::string::npos) {
     add("Ollie");
   }
-  if (n == "kickflip" || n == "doublekickflip" || n == "triplekickflip" ||
-      n == "quadkickflip") {
+  if (n.find("kickflip") != std::string::npos && n.find("varial") == std::string::npos &&
+      n.find("360") == std::string::npos && n.find("tre") == std::string::npos &&
+      n.find("finger") == std::string::npos) {
     add("Kickflip");
   }
-  if (n == "heelflip" || n == "doubleheelflip" || n == "tripleheelflip" ||
-      n == "quadheelflip") {
+  if (n.find("heelflip") != std::string::npos && n.find("varial") == std::string::npos &&
+      n.find("laser") == std::string::npos && n.find("inward") == std::string::npos) {
     add("Heelflip");
   }
-  if (n == "popshuvit" || n == "360shuvit" || n == "shuvit" || n == "bspopshuvit") {
-    add("Pop Shuvit");
+  if (n.find("popshuvit") != std::string::npos || n.find("shuvit") != std::string::npos ||
+      n.find("shuv") != std::string::npos) {
+    if (n.find("fs") != std::string::npos || n.find("frontside") != std::string::npos) {
+      add("FS Pop Shuvit");
+    } else {
+      add("Pop Shuvit");
+    }
   }
-  if (n == "fspopshuvit" || n == "fs360shuvit" || n == "fsshuvit") {
-    add("FS Pop Shuvit");
-  }
-  if (n == "varialkickflip" || n == "nightmareflip" || n == "varialflip") {
+  if (n.find("varialkickflip") != std::string::npos || n.find("nightmare") != std::string::npos ||
+      n.find("varialflip") != std::string::npos) {
     add("Varial Kickflip");
   }
-  if (n == "varialheelflip" || n == "heelflipvariallien" || n == "varialheel") {
+  if ((n.find("varial") != std::string::npos && n.find("heel") != std::string::npos) ||
+      n.find("varialheelflip") != std::string::npos || n.find("varialheel") != std::string::npos) {
     add("Varial Heelflip");
   }
-  if (n == "360flip" || n == "treflip" || n == "360doubleflip" || n == "360kickflip") {
+  if (n.find("360flip") != std::string::npos || n.find("treflip") != std::string::npos ||
+      n.find("360kickflip") != std::string::npos) {
     add("360 Flip");
   }
-  if (n == "laserflip" || n == "360heelflip" || n == "360doubleheelflip") {
+  if (n.find("laserflip") != std::string::npos || n.find("360heelflip") != std::string::npos) {
     add("Laser Flip");
   }
-  if (n == "hardflip" || n == "360hardflip") {
+  if (n.find("hardflip") != std::string::npos) {
     add("Hardflip");
   }
-  if (n == "inwardheelflip" || n == "360inwardheelflip") {
+  if (n.find("inwardheelflip") != std::string::npos || n.find("inwardheel") != std::string::npos) {
     add("Inward Heelflip");
   }
-  if (n == "lateflip" || n.starts_with("late")) {
+  if (n.find("lateflip") != std::string::npos || n.starts_with("late")) {
     add("Late Flip");
   }
-  if (n == "underflip" || n.ends_with("underflip")) {
+  if (n.find("underflip") != std::string::npos) {
     add("Underflip");
   }
   if (n.find("nocomply") != std::string::npos) {
     add("No-Comply");
   }
 
-  // --- 2. Grinds & Slides (17) ---
-  if (n == "5050" || n == "fs5050" || n == "bs5050" || n == "5050grind") {
+  // --- 2. Grinds & Slides (16) ---
+  if (n.find("5050") != std::string::npos) {
     add("50-50");
   }
-  if (n == "50" || n == "fs50" || n == "bs50" || n == "50grind") {
+  if (n.find("5050") == std::string::npos &&
+      (n.find("50") != std::string::npos || n.find("fiveo") != std::string::npos ||
+       n.find("five0") != std::string::npos)) {
     add("5-0");
   }
-  if (n == "nosegrind" || n == "fsnosegrind" || n == "bsnosegrind") {
+  if (n.find("nosegrind") != std::string::npos ||
+      (n.find("nose") != std::string::npos && n.find("grind") != std::string::npos &&
+       n.find("blunt") == std::string::npos)) {
     add("Nosegrind");
   }
-  if (n == "crooked" || n == "fscrooked" || n == "bscrooked" || n == "crookedgrind") {
+  if (n.find("overcrook") == std::string::npos &&
+      (n.find("crook") != std::string::npos || n.find("kgrind") != std::string::npos)) {
     add("Crooked");
   }
-  if (n == "overcrook" || n == "fsovercrook" || n == "bsovercrook" || n == "overcrooked") {
+  if (n.find("overcrook") != std::string::npos) {
     add("Overcrook");
   }
-  if (n == "smith" || n == "fssmith" || n == "bssmith" || n == "smithgrind") {
+  if (n.find("smith") != std::string::npos) {
     add("Smith");
   }
-  if (n == "feeble" || n == "fsfeeble" || n == "bsfeeble" || n == "feeblegrind") {
+  if (n.find("feeble") != std::string::npos) {
     add("Feeble");
   }
-  if (n == "willy" || n == "fswilly" || n == "bswilly" || n == "willygrind") {
+  if (n.find("willy") != std::string::npos) {
     add("Willy");
   }
-  if (n == "salad" || n == "fssalad" || n == "bssalad" || n == "saladgrind" ||
-      n == "suski" || n == "fssuski" || n == "bssuski") {
+  if (n.find("salad") != std::string::npos || n.find("suski") != std::string::npos) {
     add("Salad");
   }
-  if (n == "boardslide" || n == "fsboardslide" || n == "bsboardslide") {
+  if (n.find("board") != std::string::npos && n.find("finger") == std::string::npos) {
     add("Boardslide");
   }
-  if (n == "lipslide" || n == "fslipslide" || n == "bslipslide") {
+  if (n.find("lip") != std::string::npos && n.find("flip") == std::string::npos) {
     add("Lipslide");
   }
-  if (n == "noseslide" || n == "fsnoseslide" || n == "bsnoseslide") {
+  if (n.find("noseslide") != std::string::npos ||
+      (n.find("nose") != std::string::npos && n.find("slide") != std::string::npos &&
+       n.find("blunt") == std::string::npos)) {
     add("Noseslide");
   }
-  if (n == "tailslide" || n == "fstailslide" || n == "bstailslide") {
+  if (n.find("tailslide") != std::string::npos ||
+      (n.find("tail") != std::string::npos && n.find("slide") != std::string::npos &&
+       n.find("blunt") == std::string::npos)) {
     add("Tailslide");
   }
-  if (n == "bluntslide" || n == "fsbluntslide" || n == "bsbluntslide" ||
-      n == "blunt" || n == "fsblunt" || n == "bsblunt") {
+  if (n.find("nose") == std::string::npos &&
+      (n.find("bluntslide") != std::string::npos || n.find("blunt") != std::string::npos)) {
     add("Bluntslide");
   }
-  if (n == "nosebluntslide" || n == "fsnosebluntslide" || n == "bsnosebluntslide" ||
-      n == "noseblunt" || n == "fsnoseblunt" || n == "bsnoseblunt") {
+  if (n.find("noseblunt") != std::string::npos ||
+      (n.find("nose") != std::string::npos && n.find("blunt") != std::string::npos)) {
     add("Noseblunt");
   }
-  if (n == "darkslide" || n == "fsdarkslide" || n == "bsdarkslide") {
+  if (n.find("darkslide") != std::string::npos || n.find("dark") != std::string::npos) {
     add("Darkslide");
-  }
-  if (n == "crailslide" || n == "fscrailslide" || n == "bscrailslide" ||
-      n == "tailblockslide" || n == "fstailblockslide" || n == "bstailblockslide") {
-    add("Crail Slide");
   }
 
   // --- 3. Grabs & Airs (14) ---
-  if (n == "indy" || n == "indyb2b" || n == "indybone" || n == "indytweak" ||
-      n == "indy2seatbelt" || n == "indygrab") {
+  if (n.find("indy") != std::string::npos) {
     add("Indy");
   }
-  if (n == "melon" || n == "melonb2b" || n == "melonbone" || n == "melontweak" ||
-      n == "melon2method" || n == "melongrab") {
+  if (n.find("melon") != std::string::npos) {
     add("Melon");
   }
-  if (n == "mute" || n == "muteb2b" || n == "mutebone" || n == "mutetweak" ||
-      n == "mute2japan" || n == "mutegrab" || n == "weddle") {
+  if (n.find("mute") != std::string::npos || n.find("weddle") != std::string::npos) {
     add("Mute");
   }
-  if (n == "stalefish" || n == "stalefishb2b" || n == "stalefishbone" ||
-      n == "stalefishtweak" || n == "stale2rocket" || n == "stalefishdogpiss") {
+  if (n.find("stale") != std::string::npos) {
     add("Stalefish");
   }
-  if (n == "tailgrab" || n == "tailgrabb2b" || n == "tailgrabbone" ||
-      n == "tailgrabtweak" || n == "tail2tailwalk" || n == "tail2onefoot" ||
-      n == "tail2benihana") {
+  if ((n.find("tailgrab") != std::string::npos || n.find("tail") != std::string::npos) &&
+      n.find("walk") == std::string::npos && n.find("slide") == std::string::npos &&
+      n.find("blunt") == std::string::npos && n.find("block") == std::string::npos) {
     add("Tailgrab");
   }
-  if (n == "nosegrab" || n == "nosegrabb2b" || n == "nosegrabbone" ||
-      n == "nosegrabtweak" || n == "nose2rocket" || n == "nose2dogpiss" ||
-      n == "nose2airwalk") {
+  if ((n.find("nosegrab") != std::string::npos || n.find("nose") != std::string::npos) &&
+      n.find("manual") == std::string::npos && n.find("slide") == std::string::npos &&
+      n.find("grind") == std::string::npos && n.find("blunt") == std::string::npos) {
     add("Nosegrab");
   }
-  if (n == "method" || n == "melon2method") {
+  if (n.find("method") != std::string::npos) {
     add("Method");
   }
-  if (n == "japan" || n == "japanair" || n == "mute2japan") {
+  if (n.find("japan") != std::string::npos) {
     add("Japan");
   }
-  if (n == "rocketair" || n == "rocket" || n == "nose2rocket" || n == "stale2rocket") {
+  if (n.find("rocket") != std::string::npos) {
     add("Rocket Air");
   }
-  if (n == "christair" || n == "nohand2christair") {
+  if (n.find("christ") != std::string::npos) {
     add("Christ Air");
   }
-  if (n == "superdude" || n == "nohand2superdude" || n == "miraclewhip") {
+  if (n.find("superdude") != std::string::npos || n.find("miraclewhip") != std::string::npos) {
     add("Superdude");
   }
-  if (n == "benihana" || n == "tail2benihana") {
+  if (n.find("benihana") != std::string::npos) {
     add("Benihana");
   }
-  if (n == "airwalk" || n == "nose2airwalk") {
+  if (n.find("airwalk") != std::string::npos) {
     add("Airwalk");
   }
-  if (n == "tailwalk" || n == "tail2tailwalk") {
+  if (n.find("tailwalk") != std::string::npos) {
     add("Tailwalk");
   }
 
   // --- 4. Manuals, Plants & Footwork (10) ---
-  if (n == "manual" || n == "onefootmanual") {
+  if (n.find("nose") == std::string::npos && n.find("manual") != std::string::npos) {
     add("Manual");
   }
-  if (n == "nosemanual" || n == "onefootnosemanual") {
+  if (n.find("nosemanual") != std::string::npos ||
+      (n.find("nose") != std::string::npos && n.find("manual") != std::string::npos)) {
     add("Nose Manual");
   }
-  if (n == "handplant" || n == "invert" || n == "andrecht" || n == "millerflip" ||
-      n == "sadplant" || n == "fastplant" || n == "gymnastplant" || n == "eggplant" ||
-      n == "onefootinvert" || n == "laybackair") {
+  if (n.find("handplant") != std::string::npos || n.find("invert") != std::string::npos ||
+      n.find("sadplant") != std::string::npos || n.find("eggplant") != std::string::npos ||
+      n.find("andrecht") != std::string::npos || n.find("millerflip") != std::string::npos ||
+      n.find("gymnast") != std::string::npos || n.find("layback") != std::string::npos) {
     add("Handplant");
   }
-  if (n == "boneless" || n == "fsboneless" || n == "bsboneless" ||
-      n == "beanplant" || n == "fsbeanplant" || n == "bsbeanplant") {
+  if (n.find("boneless") != std::string::npos) {
     add("Boneless");
   }
-  if (n == "footplant" || n == "judo" || n == "onefoot" || n == "tail2onefoot" ||
-      n == "nose2dogpiss" || n == "stalefishdogpiss" || n == "dogpiss") {
+  if (n.find("footplant") != std::string::npos || n.find("fastplant") != std::string::npos ||
+      n.find("beanplant") != std::string::npos || n.find("sweeper") != std::string::npos ||
+      (n.find("judo") != std::string::npos && n.find("plant") != std::string::npos) ||
+      (n.find("foot") != std::string::npos && n.find("plant") != std::string::npos)) {
     add("Footplant");
   }
-  if (n == "hippyjump" || n == "hippyjump180" || n == "hippyjump360") {
+  if (n.find("hippy") != std::string::npos || n.find("hippie") != std::string::npos) {
     add("Hippy Jump");
   }
-  if (n == "powerslide" || n == "fspowerslide" || n == "bspowerslide" ||
-      n == "180powerslide" || n == "fs180powerslide" || n == "bs180powerslide") {
+  if (n.find("powerslide") != std::string::npos ||
+      (n.find("power") != std::string::npos && n.find("slide") != std::string::npos)) {
     add("Powerslide");
   }
-  if (n == "revert" || n == "fsrevert" || n == "bsrevert") {
+  if (n.find("revert") != std::string::npos) {
     add("Revert");
   }
-  if (n == "wallride" || n == "fswallride" || n == "bswallride" ||
-      n == "wallie" || n == "fswallie" || n == "bswallie") {
+  if (n.find("wallride") != std::string::npos || n.find("wallie") != std::string::npos ||
+      (n.find("wall") != std::string::npos && n.find("ride") != std::string::npos)) {
     add("Wallride");
   }
-  if (n.find("fingerflip") != std::string::npos) {
+  if (n.find("fingerflip") != std::string::npos || n.find("finger") != std::string::npos) {
     add("Fingerflip");
   }
 
@@ -1922,60 +1931,114 @@ void AchievementManager::Update(float dt) {
         UnlockInternal(0, def.id);
       }
     } else if (def.trigger_type == "gap") {
-      const float t_dx = pos[0] - def.trigger_pos[0];
-      const float t_dy = pos[1] - def.trigger_pos[1];
-      const float t_dz = pos[2] - def.trigger_pos[2];
-      const float t_dist_sq = t_dx * t_dx + t_dy * t_dy + t_dz * t_dz;
-      const float rad = def.trigger_radius > 0.0f ? def.trigger_radius : 6.0f;
+      float z1[3] = {def.trigger_pos[0], def.trigger_pos[1], def.trigger_pos[2]};
+      float z2[3] = {def.trigger_pos2[0], def.trigger_pos2[1], def.trigger_pos2[2]};
 
-      float l_dx = pos[0] - def.trigger_pos2[0];
-      if (std::fabs(def.trigger_pos2[0] - 415.0f) < 1.0f) {
-        const float alt_dx = pos[0] - 145.0f;
-        if (std::fabs(alt_dx) < std::fabs(l_dx)) {
-          l_dx = alt_dx;
-        }
+      // Ensure The Stairway Flight uses the full stair set: 415 (top) to 145 (bottom)
+      if (std::fabs(z1[0] - 415.0f) < 2.0f && std::fabs(z2[0] - 415.0f) < 2.0f) {
+        z2[0] = 145.0f;
+        z2[1] = 65.0f;
+        z2[2] = -181.0f;
       }
-      const float l_dy = pos[1] - def.trigger_pos2[1];
-      const float l_dz = pos[2] - def.trigger_pos2[2];
-      const float l_dist_sq = l_dx * l_dx + l_dy * l_dy + l_dz * l_dz;
+
+      const float rad = def.trigger_radius > 0.0f ? def.trigger_radius : 15.0f;
+
+      const float d1_dx = pos[0] - z1[0];
+      const float d1_dy = pos[1] - z1[1];
+      const float d1_dz = pos[2] - z1[2];
+      const float z1_dist_sq = d1_dx * d1_dx + d1_dy * d1_dy + d1_dz * d1_dz;
+
+      const float d2_dx = pos[0] - z2[0];
+      const float d2_dy = pos[1] - z2[1];
+      const float d2_dz = pos[2] - z2[2];
+      const float z2_dist_sq = d2_dx * d2_dx + d2_dy * d2_dy + d2_dz * d2_dz;
 
       auto& gstate = gap_states_[def.id];
       if (bailed_or_off) {
         gstate.active = false;
         gstate.was_airborne = false;
+        gstate.start_zone = 0;
+        gstate.on_ground = false;
         continue;
       }
 
       const bool in_air_or_grind = IsSkaterAirborneOrGrinding() || airborne;
 
-      if (t_dist_sq <= rad * rad) {
+      // Check if skater is in Zone 1 (Takeoff)
+      if (z1_dist_sq <= rad * rad) {
+        if (gstate.active && gstate.start_zone == 2 && z2_dist_sq > rad * rad) {
+          const float elapsed =
+              std::chrono::duration<float>(now - gstate.takeoff_time).count();
+          if (elapsed >= 0.10f && elapsed <= 18.0f && !bailed_or_off) {
+            UnlockInternal(0, def.id);
+            gstate.active = false;
+            gstate.was_airborne = false;
+            gstate.start_zone = 0;
+            gstate.on_ground = false;
+            continue;
+          }
+        }
         if (in_air_or_grind) {
-          gstate.takeoff_time = now;
           gstate.active = true;
+          gstate.start_zone = 1;
+          gstate.takeoff_time = now;
           gstate.was_airborne = true;
-        }
-      } else if (gstate.active) {
-        const float elapsed = std::chrono::duration<float>(now - gstate.takeoff_time).count();
-        if (elapsed > 12.0f) {
-          gstate.active = false;
-          gstate.was_airborne = false;
-          continue;
-        }
-        // Between takeoff and landing zones, player must remain off the ground (in air, grinding, or tricking)
-        if (l_dist_sq > rad * rad && !in_air_or_grind) {
-          gstate.active = false;
-          gstate.was_airborne = false;
-          continue;
+          gstate.on_ground = false;
         }
       }
-
-      // Check landing zone: reached end zone while active, elapsed >= 0.15s, cleanly on board
-      if (gstate.active && gstate.was_airborne && l_dist_sq <= rad * rad && t_dist_sq > rad * rad) {
-        const float elapsed = std::chrono::duration<float>(now - gstate.takeoff_time).count();
-        if (elapsed >= 0.15f && elapsed <= 12.0f && !bailed_or_off) {
-          UnlockInternal(0, def.id);
+      // Check if skater is in Zone 2 (Landing)
+      else if (z2_dist_sq <= rad * rad) {
+        if (gstate.active && gstate.start_zone == 1 && z1_dist_sq > rad * rad) {
+          const float elapsed =
+              std::chrono::duration<float>(now - gstate.takeoff_time).count();
+          if (elapsed >= 0.10f && elapsed <= 18.0f && !bailed_or_off) {
+            UnlockInternal(0, def.id);
+            gstate.active = false;
+            gstate.was_airborne = false;
+            gstate.start_zone = 0;
+            gstate.on_ground = false;
+            continue;
+          }
+        }
+        if (in_air_or_grind) {
+          gstate.active = true;
+          gstate.start_zone = 2;
+          gstate.takeoff_time = now;
+          gstate.was_airborne = true;
+          gstate.on_ground = false;
+        }
+      }
+      // Skater is between zones
+      else if (gstate.active) {
+        const float elapsed =
+            std::chrono::duration<float>(now - gstate.takeoff_time).count();
+        if (elapsed > 18.0f) {
           gstate.active = false;
           gstate.was_airborne = false;
+          gstate.start_zone = 0;
+          gstate.on_ground = false;
+          continue;
+        }
+
+        // Between takeoff and landing zones, player must remain off flat ground.
+        // Allow a 0.6s grace period for rail hopping, cracks, or quick trick transitions.
+        if (in_air_or_grind) {
+          gstate.on_ground = false;
+        } else {
+          if (!gstate.on_ground) {
+            gstate.on_ground = true;
+            gstate.ground_contact_time = now;
+          } else {
+            const float ground_elapsed =
+                std::chrono::duration<float>(now - gstate.ground_contact_time).count();
+            if (ground_elapsed > 0.6f) {
+              gstate.active = false;
+              gstate.was_airborne = false;
+              gstate.start_zone = 0;
+              gstate.on_ground = false;
+              continue;
+            }
+          }
         }
       }
     }
@@ -2917,6 +2980,7 @@ extern "C" void sub_82DA93D8(PPCContext& ctx, uint8_t* base) {
   __imp__sub_82DA93D8(ctx, base);
   if (IsValidGuestAddr(grind_tracker, 840) && IsLocalActiveTracker(base, grind_tracker) &&
       !skate3::IsSkaterBailedOrOffBoard()) {
+    skate3::NotifySkaterGrinding();
     const float d1 = LoadF32(base, grind_tracker + 760u);
     const float d2 = LoadF32(base, grind_tracker + 808u);
     const float dist = std::max(std::isfinite(d1) ? d1 : 0.0f, std::isfinite(d2) ? d2 : 0.0f);
@@ -2932,6 +2996,7 @@ extern "C" void sub_82DA9920(PPCContext& ctx, uint8_t* base) {
   const uint32_t grind_tracker = ctx.r3.u32;
   if (IsValidGuestAddr(grind_tracker, 840) && IsLocalActiveTracker(base, grind_tracker) &&
       !skate3::IsSkaterBailedOrOffBoard()) {
+    skate3::NotifySkaterGrinding();
     const float d1 = LoadF32(base, grind_tracker + 760u);
     const float d2 = LoadF32(base, grind_tracker + 808u);
     const float dist = std::max(std::isfinite(d1) ? d1 : 0.0f, std::isfinite(d2) ? d2 : 0.0f);

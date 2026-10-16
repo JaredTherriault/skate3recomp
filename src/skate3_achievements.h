@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <rex/cvar.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/overlay/simple_settings_overlay.h>
 
@@ -31,6 +32,8 @@ class ImmediateTexture;
 struct SDL_AudioStream;
 
 namespace skate3 {
+
+REXCVAR_DECLARE(bool, achievement_sound);
 
 class AchievementManager;
 
@@ -186,8 +189,11 @@ class AchievementManager {
   float prev_pos_[3] = {0.0f, 0.0f, 0.0f};
   struct GapTriggerState {
     std::chrono::steady_clock::time_point takeoff_time{};
+    std::chrono::steady_clock::time_point ground_contact_time{};
     bool active = false;
     bool was_airborne = false;
+    int start_zone = 0;
+    bool on_ground = false;
   };
   std::unordered_map<uint32_t, GapTriggerState> gap_states_;
 
@@ -206,6 +212,8 @@ class AchievementManager {
 bool IsSkaterOnBoardAirborne();
 bool IsSkaterBailedOrOffBoard();
 bool IsSkaterAirborneOrGrinding();
+bool IsSkaterGrinding();
+void NotifySkaterGrinding();
 
 uint32_t GetLocalSkaterPtr();
 bool IsLocalGameplayActive();
