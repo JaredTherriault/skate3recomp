@@ -397,73 +397,66 @@ static inline float WhiteNoise(uint32_t& seed) {
 
 // 1. Skate 3 Big Combo Land & Bank Sound (Achievement Pop)
 // Components:
-// 1) Punchy skateboard 4-wheel landing impact (sub-bass deck slap + snappy grip/pavement friction)
-// 2) The rising score HUD swoosh / whoosh (air rush sweeping upwards)
-// 3) The satisfying "cha-ching" combo bank register chime ringing out with warm decay
+// 1) Warm, punchy skateboard 4-wheel landing impact (sub-bass thump + maple deck resonance + low-mid urethane texture)
+// 2) Score HUD banking whoosh / air swell (smooth sweep across low-mids)
+// 3) Resonant combo bank chord (warm Rhodes / vibraphone chime in middle register C4-E5, no shrill treble)
+// 4) Warm single-pole lowpass filter (< 1.1 kHz) to guarantee zero harshness
 std::vector<float> SynthesizeUnlockSound() {
-  const int total_samples = static_cast<int>(kSoundSampleRate * 1.35f);
+  const int total_samples = static_cast<int>(kSoundSampleRate * 1.30f);
   std::vector<float> pcm(total_samples * 2, 0.0f);
   uint32_t noise_seed = 987654321u;
 
+  const float fc = 1100.0f;
+  const float wc = 2.0f * kSoundPi * fc / kSoundSampleRate;
+  const float lp_alpha = wc / (1.0f + wc);
+  float lp_l = 0.0f;
+  float lp_r = 0.0f;
+
   for (int i = 0; i < total_samples; ++i) {
     const float t = static_cast<float>(i) / kSoundSampleRate;
-    float left = 0.0f;
-    float right = 0.0f;
+    float raw_l = 0.0f;
+    float raw_r = 0.0f;
 
-    // --- A. Board Landing Impact (t = 0.00s to 0.09s) ---
-    if (t < 0.09f) {
-      // 1. Deck thump: 120 Hz sweeping down to 45 Hz with fast decay
-      const float thump_decay = std::exp(-t / 0.028f);
-      const float thump_freq = 45.0f + 75.0f * std::exp(-t / 0.022f);
+    // --- A. Board Landing Impact (t = 0.00s to 0.08s) ---
+    if (t < 0.08f) {
+      // 1. Deck thump: 105 Hz sweeping down to 42 Hz with fast decay
+      const float thump_decay = std::exp(-t / 0.026f);
+      const float thump_freq = 42.0f + 63.0f * std::exp(-t / 0.018f);
       const float thump = 0.65f * thump_decay * std::sin(2.0f * kSoundPi * thump_freq * t);
 
-      // 2. Concrete/grip snap: shaped noise burst (first 25ms)
-      const float snap_decay = std::exp(-t / 0.018f);
-      const float n = WhiteNoise(noise_seed);
-      const float snap = 0.35f * snap_decay * n * std::sin(2.0f * kSoundPi * 3200.0f * t);
+      // 2. Hollow maple deck body resonance (warm 195 Hz)
+      const float wood_decay = std::exp(-t / 0.038f);
+      const float wood = 0.42f * wood_decay * std::sin(2.0f * kSoundPi * 195.0f * t);
 
-      // 3. Truck/hardware click (at t = 0.008s)
-      float clack = 0.0f;
-      if (t >= 0.008f && t < 0.045f) {
-        const float ct = t - 0.008f;
-        clack = 0.25f * std::exp(-ct / 0.008f) * std::sin(2.0f * kSoundPi * 1450.0f * ct);
-      }
+      // 3. Wheel urethane contact texture (filtered low-mid burst around 360 Hz)
+      const float wheel_decay = std::exp(-t / 0.022f);
+      const float wheel_n = WhiteNoise(noise_seed);
+      const float wheel = 0.28f * wheel_decay * wheel_n * std::sin(2.0f * kSoundPi * 360.0f * t);
 
-      left += (thump * 0.95f + snap * 1.0f + clack * 0.85f);
-      right += (thump * 0.95f + snap * 0.85f + clack * 1.0f);
+      raw_l += (thump * 0.95f + wood * 1.0f + wheel * 0.90f);
+      raw_r += (thump * 0.95f + wood * 0.90f + wheel * 1.0f);
     }
 
-    // --- B. Score Bank Whoosh / Multiplier Swell (t = 0.025s to 0.16s) ---
+    // --- B. Score Bank Whoosh / Air Swell (t = 0.025s to 0.16s) ---
     if (t >= 0.025f && t < 0.16f) {
       const float wt = (t - 0.025f) / 0.135f;
       const float whoosh_env = std::sin(wt * kSoundPi);
-      const float whoosh_freq = 240.0f + 680.0f * (wt * wt);
-      const float whoosh_noise = WhiteNoise(noise_seed) * 0.18f;
+      const float whoosh_freq = 190.0f + 250.0f * (wt * wt);
+      const float whoosh_noise = WhiteNoise(noise_seed) * 0.15f;
       const float whoosh =
-          0.32f * whoosh_env * (std::sin(2.0f * kSoundPi * whoosh_freq * t) + whoosh_noise);
+          0.26f * whoosh_env * (std::sin(2.0f * kSoundPi * whoosh_freq * t) + whoosh_noise);
 
-      left += whoosh * (1.1f - 0.5f * wt);
-      right += whoosh * (0.6f + 0.5f * wt);
+      raw_l += whoosh * (1.05f - 0.4f * wt);
+      raw_r += whoosh * (0.65f + 0.4f * wt);
     }
 
-    // --- C. The Iconic Combo Bank "Cha-Ching" Chime ---
-    // Strike 1 ("Cha-" coin / register latch at t = 0.095s)
-    if (t >= 0.095f && t < 0.22f) {
-      const float ct = t - 0.095f;
-      const float c_env = std::exp(-ct / 0.022f);
-      const float c_tone =
-          0.30f * c_env *
-          (std::sin(2.0f * kSoundPi * 1850.0f * ct) + 0.6f * std::sin(2.0f * kSoundPi * 2450.0f * ct));
-      left += c_tone * 0.9f;
-      right += c_tone * 1.0f;
-    }
+    // --- C. Warm Combo Bank Chord (Mellow Rhodes / Vibraphone Chime) ---
+    // Rings out warmly in the middle register (C4 to E5: 261 Hz to 659 Hz)
+    if (t >= 0.080f) {
+      const float bt = t - 0.080f;
+      const float attack = std::min(1.0f, bt / 0.014f);
 
-    // Strike 2 ("-CHING!" resonant cash-in bell chime at t = 0.135s)
-    if (t >= 0.135f) {
-      const float bt = t - 0.135f;
-      const float attack = std::min(1.0f, bt / 0.0025f);
-
-      struct Partial {
+      struct ChimeTone {
         float freq;
         float amp;
         float decay;
@@ -471,69 +464,90 @@ std::vector<float> SynthesizeUnlockSound() {
         float pan_r;
       };
 
-      static const Partial kBellPartials[] = {
-          {2093.00f, 0.35f, 0.90f, 0.95f, 0.85f},  // C7 (Fundamental cash ring)
-          {2637.02f, 0.30f, 0.75f, 0.85f, 1.00f},  // E7 (Bright brass major third)
-          {3135.96f, 0.24f, 0.65f, 1.00f, 0.85f},  // G7 (Register fifth)
-          {4186.01f, 0.18f, 0.45f, 0.90f, 0.90f},  // C8 (Sparkling bell overtone)
-          {5274.04f, 0.10f, 0.30f, 0.80f, 1.00f},  // E8 (Coin sparkle shimmer)
+      static const ChimeTone kBankChord[] = {
+          {261.63f, 0.42f, 0.95f, 0.95f, 0.90f},  // C4 (Deep warm fundamental)
+          {329.63f, 0.38f, 0.85f, 0.85f, 0.95f},  // E4 (Major third body)
+          {392.00f, 0.35f, 0.75f, 1.00f, 0.85f},  // G4 (Fifth resonance)
+          {523.25f, 0.28f, 0.65f, 0.88f, 0.98f},  // C5 (Warm bell octave)
+          {659.25f, 0.18f, 0.50f, 0.95f, 0.92f},  // E5 (Soft mellow shimmer)
       };
 
-      for (const auto& p : kBellPartials) {
-        const float decay_env = std::exp(-bt / p.decay);
-        const float phase_l = 2.0f * kSoundPi * (p.freq - 0.3f) * bt;
-        const float phase_r = 2.0f * kSoundPi * (p.freq + 0.3f) * bt;
-        const float val = attack * decay_env * p.amp;
-        left += val * std::sin(phase_l) * p.pan_l;
-        right += val * std::sin(phase_r) * p.pan_r;
+      for (const auto& chord : kBankChord) {
+        const float env = attack * std::exp(-bt / chord.decay);
+        const float phase_l = 2.0f * kSoundPi * (chord.freq - 0.25f) * bt;
+        const float phase_r = 2.0f * kSoundPi * (chord.freq + 0.25f) * bt;
+        const float tone_l = std::sin(phase_l);
+        const float tone_r = std::sin(phase_r);
+
+        const float harm_l = 0.15f * std::sin(2.0f * phase_l);
+        const float harm_r = 0.15f * std::sin(2.0f * phase_r);
+
+        const float val_l = env * chord.amp * (tone_l + harm_l);
+        const float val_r = env * chord.amp * (tone_r + harm_r);
+
+        raw_l += val_l * chord.pan_l;
+        raw_r += val_r * chord.pan_r;
       }
     }
 
-    pcm[i * 2 + 0] = std::tanh(left * 1.1f) * 0.80f;
-    pcm[i * 2 + 1] = std::tanh(right * 1.1f) * 0.80f;
+    // Apply warm single-pole lowpass filter
+    lp_l += lp_alpha * (raw_l - lp_l);
+    lp_r += lp_alpha * (raw_r - lp_r);
+
+    // Warm analog saturation (tanh)
+    pcm[i * 2 + 0] = std::tanh(lp_l * 1.05f) * 0.78f;
+    pcm[i * 2 + 1] = std::tanh(lp_r * 1.05f) * 0.78f;
   }
   return pcm;
 }
 
-// 2. Skate 3 Combo Multiplier Trick Tick (Fractional Progress Sound)
-// A snappy skateboard pop + clean metallic HUD trick tick (~0.18s)
+// 2. Skate 3 Combo Multiplier / Progress Tick (Fractional Progress Sound)
+// A soft, tactile wooden "thoc" / gentle marimba pop (~0.12s). Zero shrill treble.
 std::vector<float> SynthesizeProgressSound() {
-  const int total_samples = static_cast<int>(kSoundSampleRate * 0.22f);
+  const int total_samples = static_cast<int>(kSoundSampleRate * 0.14f);
   std::vector<float> pcm(total_samples * 2, 0.0f);
-  uint32_t noise_seed = 543216789u;
+
+  const float fc = 950.0f;
+  const float wc = 2.0f * kSoundPi * fc / kSoundSampleRate;
+  const float lp_alpha = wc / (1.0f + wc);
+  float lp_l = 0.0f;
+  float lp_r = 0.0f;
 
   for (int i = 0; i < total_samples; ++i) {
     const float t = static_cast<float>(i) / kSoundSampleRate;
-    float left = 0.0f;
-    float right = 0.0f;
+    float raw_l = 0.0f;
+    float raw_r = 0.0f;
 
-    // Quick wood pop (t = 0 to 0.035s)
-    if (t < 0.035f) {
-      const float frac = t / 0.035f;
-      const float pop_freq = 650.0f - 400.0f * std::sqrt(frac);
+    // Tactile wood pop: 340 Hz sweeping down to 160 Hz (t = 0 to 0.028s)
+    if (t < 0.028f) {
+      const float frac = t / 0.028f;
+      const float pop_freq = 340.0f - 180.0f * frac;
       const float pop_env = (1.0f - frac);
-      const float noise = WhiteNoise(noise_seed) * 0.25f;
-      const float pop = 0.40f * pop_env * (std::sin(2.0f * kSoundPi * pop_freq * t) + noise);
-      left += pop * 0.9f;
-      right += pop * 0.9f;
+      const float pop = 0.45f * pop_env * std::sin(2.0f * kSoundPi * pop_freq * t);
+      raw_l += pop * 0.95f;
+      raw_r += pop * 0.95f;
     }
 
-    // Crisp metallic trick counter tick (rings out from t = 0.012s)
-    if (t >= 0.012f) {
-      const float bt = t - 0.012f;
-      const float attack = std::min(1.0f, bt / 0.0015f);
-      const float env1 = attack * std::exp(-bt / 0.075f);
-      const float env2 = attack * std::exp(-bt / 0.040f);
+    // Gentle warm marimba tick (t = 0.006s onwards)
+    if (t >= 0.006f) {
+      const float bt = t - 0.006f;
+      const float attack = std::min(1.0f, bt / 0.004f);
+      const float env1 = attack * std::exp(-bt / 0.048f);
+      const float env2 = attack * std::exp(-bt / 0.032f);
 
-      const float wave1 = 0.32f * env1 * std::sin(2.0f * kSoundPi * 1975.53f * bt);  // B6
-      const float wave2 = 0.16f * env2 * std::sin(2.0f * kSoundPi * 2959.96f * bt);  // F#7
+      // Low-mid warm notes: A4 (440 Hz) and E5 (659 Hz)
+      const float wave1 = 0.30f * env1 * std::sin(2.0f * kSoundPi * 440.00f * bt);
+      const float wave2 = 0.15f * env2 * std::sin(2.0f * kSoundPi * 659.25f * bt);
 
-      left += (wave1 * 0.95f + wave2 * 0.85f);
-      right += (wave1 * 0.85f + wave2 * 1.00f);
+      raw_l += (wave1 * 0.95f + wave2 * 0.85f);
+      raw_r += (wave1 * 0.85f + wave2 * 0.95f);
     }
 
-    pcm[i * 2 + 0] = std::tanh(left * 1.15f) * 0.72f;
-    pcm[i * 2 + 1] = std::tanh(right * 1.15f) * 0.72f;
+    lp_l += lp_alpha * (raw_l - lp_l);
+    lp_r += lp_alpha * (raw_r - lp_r);
+
+    pcm[i * 2 + 0] = std::tanh(lp_l * 1.10f) * 0.65f;
+    pcm[i * 2 + 1] = std::tanh(lp_r * 1.10f) * 0.65f;
   }
   return pcm;
 }
