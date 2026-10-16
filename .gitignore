@@ -12,8 +12,12 @@
 
 # Local game dump and retail media. Users must provide their own copy.
 /game/
+/dlc/
+/Skate3+DLC/
 *.iso
 *.xex
+*.big
+*.rx2
 
 # Local runtime/config overrides
 skate3.toml
@@ -52,9 +56,13 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Mods and packages
+*.mod
+/custom_bigs/
 /mods/compiled/*
 !/mods/compiled/.gitkeep
 /mods/.spot_registry.json
 *.spot_registry.json
 tools/python/
 /mods/raw/yorha_2b_player_model/
+
