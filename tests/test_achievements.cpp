@@ -24,6 +24,7 @@ namespace {
 bool g_has_skater_pos = true;
 float g_skater_pos[3] = {0.0f, 0.0f, 0.0f};
 bool g_skater_airborne = false;
+bool g_skater_grinding = false;
 bool g_skater_bailed_or_off = false;
 uint32_t g_mock_mapped_ach_id = 0;
 
@@ -33,6 +34,17 @@ void SetSkaterState(float x, float y, float z, bool airborne, bool bailed_or_off
   g_skater_pos[1] = y;
   g_skater_pos[2] = z;
   g_skater_airborne = airborne;
+  g_skater_grinding = false;
+  g_skater_bailed_or_off = bailed_or_off;
+}
+
+void SetSkaterStateGrind(float x, float y, float z, bool grinding, bool bailed_or_off) {
+  g_has_skater_pos = true;
+  g_skater_pos[0] = x;
+  g_skater_pos[1] = y;
+  g_skater_pos[2] = z;
+  g_skater_airborne = false;
+  g_skater_grinding = grinding;
   g_skater_bailed_or_off = bailed_or_off;
 }
 
@@ -79,6 +91,10 @@ namespace skate3 {
 
 bool IsSkaterOnBoardAirborne() {
   return g_skater_airborne;
+}
+
+bool IsSkaterAirborneOrGrinding() {
+  return g_skater_airborne || g_skater_grinding;
 }
 
 bool IsSkaterBailedOrOffBoard() {
@@ -560,24 +576,35 @@ int main() {
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_reach_location"),
                "sample_reach_location should unlock at upper University overlook");
 
-    // 5.3: sample_gap ("The Stairway Flight": [414.0, 73.3, -256.0] -> [423.0, 69.4, -252.0], r=3.8)
-    // Negative test: rolling on ground without going airborne
-    SetSkaterState(414.0f, 73.3f, -256.0f, false, false);
+    // 5.3: sample_gap ("The Stairway Flight": [415.0, 69.0, -210.0] -> [415.0, 65.0, -181.0], r=6.5)
+    // Negative test 1: rolling on ground without grinding or going airborne
+    SetSkaterState(415.0f, 69.0f, -210.0f, false, false);
     mgr.Update(0.05f);
     std::this_thread::sleep_for(std::chrono::milliseconds(170));
-    SetSkaterState(423.0f, 69.4f, -252.0f, false, false);
+    SetSkaterState(415.0f, 65.0f, -181.0f, false, false);
     mgr.Update(0.05f);
     TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
-               "sample_gap must NOT unlock without going airborne");
+               "sample_gap must NOT unlock by rolling on the ground down the stairs");
 
-    // Positive test: jump, go airborne, land cleanly
-    SetSkaterState(414.0f, 73.3f, -256.0f, true, false);
+    // Negative test 2: start grind, but touch ground in the middle of the stairs
+    SetSkaterStateGrind(415.0f, 69.0f, -210.0f, true, false);
+    mgr.Update(0.05f);
+    SetSkaterState(415.0f, 67.0f, -195.0f, false, false);  // touched ground in the middle!
     mgr.Update(0.05f);
     std::this_thread::sleep_for(std::chrono::milliseconds(170));
-    SetSkaterState(423.0f, 69.4f, -252.0f, false, false);
+    SetSkaterStateGrind(415.0f, 65.0f, -181.0f, true, false);
+    mgr.Update(0.05f);
+    TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
+               "sample_gap must NOT unlock if skater touches ground in the middle of the stairs");
+
+    // Positive test: grind the rail from top to bottom without touching ground
+    SetSkaterStateGrind(415.0f, 69.0f, -210.0f, true, false);
+    mgr.Update(0.05f);
+    std::this_thread::sleep_for(std::chrono::milliseconds(170));
+    SetSkaterStateGrind(415.0f, 65.0f, -181.0f, true, false);
     mgr.Update(0.05f);
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_gap"),
-               "sample_gap should unlock after airborne jump and clean landing");
+               "sample_gap should unlock after continuous grind down the stair set");
 
     // 5.4: sample_speed ("Breeze on the Boulevard" - 30 mph)
     SetSkaterState(0.0f, 0.0f, 0.0f, false, false);

@@ -1357,6 +1357,11 @@ bool IsSkaterBailedOrOffBoard() {
     return g_current_player_state >= 500;
 }
 
+bool IsSkaterAirborneOrGrinding() {
+    const int32_t state = g_current_player_state;
+    return (state >= 200 && state < 500) || g_onboard_in_air;
+}
+
 namespace cheats {
 
 float GetGravityMultiplier() {

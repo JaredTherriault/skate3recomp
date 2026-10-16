@@ -173,6 +173,7 @@ class AchievementManager {
 
 bool IsSkaterOnBoardAirborne();
 bool IsSkaterBailedOrOffBoard();
+bool IsSkaterAirborneOrGrinding();
 
 uint32_t GetLocalSkaterPtr();
 bool IsLocalGameplayActive();

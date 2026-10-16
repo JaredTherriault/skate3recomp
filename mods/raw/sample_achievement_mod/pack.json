@@ -34,20 +34,20 @@
     },
     {
       "category": "Sample Achievement Mod",
-      "description": "Clear the University stair set from the upper Chan Center platform to the lower courtyard.",
+      "description": "Grind or air the long University plaza exit stair set from top to bottom without touching the ground.",
       "gamerscore": 50,
       "id": "sample_gap",
       "landing": [
-        423.0,
-        69.4,
-        -252.0
+        415.0,
+        65.0,
+        -181.0
       ],
       "name": "The Stairway Flight",
-      "radius": 3.8,
+      "radius": 6.5,
       "takeoff": [
-        414.0,
-        73.3,
-        -256.0
+        415.0,
+        69.0,
+        -210.0
       ],
       "trigger": "gap"
     },

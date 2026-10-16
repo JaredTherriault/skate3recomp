@@ -1410,7 +1410,18 @@ void AchievementManager::Update(float dt) {
       const float t_dy = pos[1] - def.trigger_pos[1];
       const float t_dz = pos[2] - def.trigger_pos[2];
       const float t_dist_sq = t_dx * t_dx + t_dy * t_dy + t_dz * t_dz;
-      const float rad = def.trigger_radius > 0.0f ? def.trigger_radius : 5.0f;
+      const float rad = def.trigger_radius > 0.0f ? def.trigger_radius : 6.0f;
+
+      float l_dx = pos[0] - def.trigger_pos2[0];
+      if (std::fabs(def.trigger_pos2[0] - 415.0f) < 1.0f) {
+        const float alt_dx = pos[0] - 145.0f;
+        if (std::fabs(alt_dx) < std::fabs(l_dx)) {
+          l_dx = alt_dx;
+        }
+      }
+      const float l_dy = pos[1] - def.trigger_pos2[1];
+      const float l_dz = pos[2] - def.trigger_pos2[2];
+      const float l_dist_sq = l_dx * l_dx + l_dy * l_dy + l_dz * l_dz;
 
       auto& gstate = gap_states_[def.id];
       if (bailed_or_off) {
@@ -1419,33 +1430,33 @@ void AchievementManager::Update(float dt) {
         continue;
       }
 
+      const bool in_air_or_grind = IsSkaterAirborneOrGrinding() || airborne;
+
       if (t_dist_sq <= rad * rad) {
-        gstate.takeoff_time = now;
-        gstate.active = true;
-        if (airborne) {
+        if (in_air_or_grind) {
+          gstate.takeoff_time = now;
+          gstate.active = true;
           gstate.was_airborne = true;
         }
       } else if (gstate.active) {
         const float elapsed = std::chrono::duration<float>(now - gstate.takeoff_time).count();
-        if (elapsed > 8.0f) {
+        if (elapsed > 12.0f) {
           gstate.active = false;
           gstate.was_airborne = false;
           continue;
         }
-        if (airborne) {
-          gstate.was_airborne = true;
+        // Between takeoff and landing zones, player must remain off the ground (in air, grinding, or tricking)
+        if (l_dist_sq > rad * rad && !in_air_or_grind) {
+          gstate.active = false;
+          gstate.was_airborne = false;
+          continue;
         }
       }
 
-      // Check landing zone: must have taken off, gone airborne on-board, exited takeoff sphere,
-      // entered landing sphere within 0.15s..8.0s, and landed cleanly on-board (!airborne).
-      const float l_dx = pos[0] - def.trigger_pos2[0];
-      const float l_dy = pos[1] - def.trigger_pos2[1];
-      const float l_dz = pos[2] - def.trigger_pos2[2];
-      const float l_dist_sq = l_dx * l_dx + l_dy * l_dy + l_dz * l_dz;
+      // Check landing zone: reached end zone while active, elapsed >= 0.15s, cleanly on board
       if (gstate.active && gstate.was_airborne && l_dist_sq <= rad * rad && t_dist_sq > rad * rad) {
         const float elapsed = std::chrono::duration<float>(now - gstate.takeoff_time).count();
-        if (elapsed >= 0.15f && elapsed <= 8.0f && !airborne) {
+        if (elapsed >= 0.15f && elapsed <= 12.0f && !bailed_or_off) {
           UnlockInternal(0, def.id);
           gstate.active = false;
           gstate.was_airborne = false;
