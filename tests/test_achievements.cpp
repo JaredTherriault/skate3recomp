@@ -815,7 +815,7 @@ int main() {
       }
     }
     const std::vector<std::string> remaining_grinds = {
-        "FS 50-50", "BS 5-0 Grind", "FS Nosegrind", "FS Crook", "BS Smith", "FS Feeble",
+        "FS 50-50", "BS 5-O Grind", "FS Nosegrind", "FS Crook", "BS Smith", "FS Feeble",
         "BS Willy", "FS Suski", "FS Boardslide", "BS Lipslide", "FS Noseslide",
         "BS Tailslide", "FS Bluntslide", "FS Darkslide",
     };
@@ -828,8 +828,8 @@ int main() {
     // 6.3: Airtime Acrobat (14 grabs & airs)
     const std::vector<std::string> all_grabs = {
         "FS Indy", "BS Melon", "FS Mute", "BS Stalefish", "Tailgrab",
-        "Nosegrab", "FS Method", "BS Japan", "Rocket Air", "Christ Air",
-        "Superdude", "BS Benihana", "FS Airwalk", "BS Tailwalk",
+        "Nosegrab", "FS Method", "Seatbelt", "Rocket Air", "Christ Air",
+        "Superdude", "BS Benihanna", "FS Airwalk", "Cross Bone",
     };
     for (size_t i = 0; i < all_grabs.size(); ++i) {
       TEST_CHECK(!mgr.IsUnlocked("Sample Achievement Mod:sample_grab_master"),
@@ -839,14 +839,14 @@ int main() {
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_grab_master"),
                "sample_grab_master (Airtime Acrobat) should unlock at 14/14 grabs");
 
-    // 6.4: Street Specialist (10 manuals, plants & footwork)
+    // 6.4: Street Specialist (9 manuals, plants & footwork)
     // Verify "Nose Manual" does NOT falsely mark "Manual"
     mgr.OnTrickLanded("OneFootNoseManual");
     {
       const auto data = mgr.GetAchievementData();
       const auto* other_item = FindUiItem(data, "Street Specialist");
-      TEST_CHECK(other_item && other_item->progress_total == 10 && other_item->progress_current == 1,
-                 "Street Specialist should be at 1/10 after Nose Manual");
+      TEST_CHECK(other_item && other_item->progress_total == 9 && other_item->progress_current == 1,
+                 "Street Specialist should be at 1/9 after Nose Manual");
       for (const auto& [t_name, done] : other_item->checklist) {
         if (t_name == "Nose Manual") {
           TEST_CHECK(done, "Nose Manual should be checked off");
@@ -857,13 +857,13 @@ int main() {
     }
     const std::vector<std::string> remaining_other = {
         "Manual", "FS Invert", "BS Footplant", "FS Boneless", "Hippy Jump 180",
-        "Powerslide 180", "BS Revert", "FS Wallride", "Kickflip Fingerflip",
+        "Powerslide 180", "BS Revert", "Kickflip Fingerflip",
     };
     for (const auto& t : remaining_other) {
       mgr.OnTrickLanded(t);
     }
     TEST_CHECK(mgr.IsUnlocked("Sample Achievement Mod:sample_other_master"),
-               "sample_other_master (Street Specialist) should unlock at 10/10 tricks");
+               "sample_other_master (Street Specialist) should unlock at 9/9 tricks");
 
     std::cout << "[PASS] All 4 Trick Group Checklist achievements & UI progress/checklists verified\n";
   }

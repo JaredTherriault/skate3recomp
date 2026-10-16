@@ -151,16 +151,16 @@ std::vector<std::string> GetTrickGroupTricks(std::string_view group_name) {
   }
   if (g == "grabs" || g == "grabsairs" || g == "grab" || g == "airs") {
     return {
-        "Indy",       "Melon",      "Mute",      "Stalefish", "Tailgrab",
-        "Nosegrab",   "Method",     "Japan",     "Rocket Air", "Christ Air",
-        "Superdude",  "Benihana",   "Airwalk",   "Tailwalk",
+        "Indy",       "Melon",      "Mute",        "Stalefish", "Tailgrab",
+        "Nosegrab",   "Method",     "Seatbelt",    "Rocket Air", "Christ Air",
+        "Superdude",  "Benihana",   "Airwalk",     "Cross Bone",
     };
   }
   if (g == "other" || g == "manuals" || g == "plants" || g == "footwork" ||
       g == "manualsplantsfootwork") {
     return {
         "Manual",     "Nose Manual", "Handplant", "Boneless",  "Footplant",
-        "Hippy Jump", "Powerslide",  "Revert",    "Wallride",  "Fingerflip",
+        "Hippy Jump", "Powerslide",  "Revert",    "Fingerflip",
     };
   }
   return {};
@@ -236,8 +236,9 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
     add("50-50");
   }
   if (n.find("5050") == std::string::npos &&
-      (n.find("50") != std::string::npos || n.find("fiveo") != std::string::npos ||
-       n.find("five0") != std::string::npos)) {
+      (n.find("50") != std::string::npos || n.find("5o") != std::string::npos ||
+       n.find("five") != std::string::npos ||
+       (n.find("tail") != std::string::npos && n.find("grind") != std::string::npos))) {
     add("5-0");
   }
   if (n.find("nosegrind") != std::string::npos ||
@@ -293,10 +294,15 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
   }
 
   // --- 3. Grabs & Airs (14) ---
-  if (n.find("indy") != std::string::npos) {
+  if (n.find("indy") != std::string::npos || n.find("fsair") != std::string::npos ||
+      n.find("frontsideair") != std::string::npos || n.find("fsgrab") != std::string::npos ||
+      (n.find("front") != std::string::npos && n.find("air") != std::string::npos)) {
     add("Indy");
   }
-  if (n.find("melon") != std::string::npos) {
+  if (n.find("melon") != std::string::npos || n.find("melan") != std::string::npos ||
+      n.find("bsair") != std::string::npos || n.find("backsideair") != std::string::npos ||
+      n.find("bsgrab") != std::string::npos ||
+      (n.find("back") != std::string::npos && n.find("air") != std::string::npos)) {
     add("Melon");
   }
   if (n.find("mute") != std::string::npos || n.find("weddle") != std::string::npos) {
@@ -315,11 +321,16 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
       n.find("grind") == std::string::npos && n.find("blunt") == std::string::npos) {
     add("Nosegrab");
   }
-  if (n.find("method") != std::string::npos) {
+  if (n.find("method") != std::string::npos || n.find("methodair") != std::string::npos ||
+      (n.find("method") != std::string::npos && n.find("air") != std::string::npos)) {
     add("Method");
   }
-  if (n.find("japan") != std::string::npos) {
-    add("Japan");
+  if (n.find("seatbelt") != std::string::npos || n.find("seat") != std::string::npos) {
+    add("Seatbelt");
+  }
+  if (n.find("crossbone") != std::string::npos ||
+      (n.find("cross") != std::string::npos && n.find("bone") != std::string::npos)) {
+    add("Cross Bone");
   }
   if (n.find("rocket") != std::string::npos) {
     add("Rocket Air");
@@ -327,14 +338,20 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
   if (n.find("christ") != std::string::npos) {
     add("Christ Air");
   }
-  if (n.find("superdude") != std::string::npos || n.find("miraclewhip") != std::string::npos) {
+  if (n.find("superdude") != std::string::npos || n.find("super") != std::string::npos ||
+      n.find("miraclewhip") != std::string::npos) {
     add("Superdude");
   }
-  if (n.find("benihana") != std::string::npos) {
+  if (n.find("benihana") != std::string::npos || n.find("benihanna") != std::string::npos ||
+      n.find("beni") != std::string::npos) {
     add("Benihana");
+    add("Benihanna");
   }
   if (n.find("airwalk") != std::string::npos) {
     add("Airwalk");
+  }
+  if (n.find("japan") != std::string::npos) {
+    add("Japan");
   }
   if (n.find("tailwalk") != std::string::npos) {
     add("Tailwalk");
@@ -3139,8 +3156,7 @@ extern "C" void sub_82774080(PPCContext& ctx, uint8_t* base) {
           for (uint32_t i = 0; i < count; ++i) {
             const uint32_t entry = q + 20u + i * 200u;
             const int32_t trick_id = static_cast<int32_t>(LoadU32(base, entry));
-            const uint8_t incomplete = LoadU8(base, entry + 178u);
-            if (incomplete == 0 && trick_id > 0 && trick_id < 332) {
+            if (trick_id > 0 && trick_id < 332) {
               if (std::find(s_pending_tricks.begin(), s_pending_tricks.end(), trick_id) ==
                   s_pending_tricks.end()) {
                 s_pending_tricks.push_back(trick_id);
@@ -3166,6 +3182,7 @@ extern "C" void sub_82774080(PPCContext& ctx, uint8_t* base) {
                   LoadU32(base, 0x820862A8u + static_cast<uint32_t>(trick_id) * 24u + 20u);
               const std::string name = ReadGuestCString(base, name_ptr, 64);
               if (!name.empty()) {
+                REXLOG_INFO("Skate 3 Achievements: Landed trick '{}' (trick_id={})", name, trick_id);
                 mgr->OnTrickLanded(name);
               }
               if (trick_id == 252 && LoadU32(base, telemetry + 9844u) != 0) {
