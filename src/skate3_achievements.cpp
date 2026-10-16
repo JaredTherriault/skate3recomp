@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <functional>
 
 
 #include <fmt/format.h>
@@ -375,11 +376,291 @@ std::vector<std::string> MapToCanonicalTricks(std::string_view raw_trick_name) {
 }
 
 // ============================================================================
+// Achievement & Toast Sound System (Procedural Synthesis + WAV Customization)
+// ============================================================================
+
+REXCVAR_DEFINE_BOOL(achievement_sound, true, "Achievements",
+                    "Play sound effects on achievement unlocks and progress notifications");
+
+REXCVAR_DEFINE_DOUBLE(achievement_sound_volume, 1.0, "Achievements",
+                      "Volume of achievement sound effects (0.0 to 1.0)");
+
+namespace {
+
+constexpr int kSoundSampleRate = 48000;
+constexpr float kSoundPi = 3.14159265358979323846f;
+
+// 1. Procedural Achievement Unlock Chime
+// Iconic Xbox-inspired chord: Warm rising swell (440 -> 660 Hz), followed by a triumphant
+// crystalline C6-E6-G6-C7-D7 bell chord with sparkling inharmonic overtones and warm stereo decay.
+std::vector<float> SynthesizeUnlockSound() {
+  const int total_samples = static_cast<int>(kSoundSampleRate * 1.5f);
+  std::vector<float> pcm(total_samples * 2, 0.0f);
+
+  for (int i = 0; i < total_samples; ++i) {
+    const float t = static_cast<float>(i) / kSoundSampleRate;
+    float left = 0.0f;
+    float right = 0.0f;
+
+    // Transient swell (0.00s to 0.08s)
+    if (t < 0.08f) {
+      const float swell_t = t / 0.08f;
+      const float freq = 440.0f + 220.0f * swell_t;
+      const float env = std::sin(swell_t * kSoundPi * 0.5f);
+      const float sample = 0.22f * env * std::sin(2.0f * kSoundPi * freq * t);
+      left += sample * 0.9f;
+      right += sample * 0.9f;
+    }
+
+    // Main Triumphant Bell Chime (strikes at t = 0.065s)
+    if (t >= 0.065f) {
+      const float bt = t - 0.065f;
+      const float attack = std::min(1.0f, bt / 0.003f);
+
+      struct Partial {
+        float freq;
+        float amp;
+        float decay;
+        float pan_l;
+        float pan_r;
+      };
+
+      static const Partial kPartials[] = {
+          {1046.50f, 0.28f, 1.10f, 0.95f, 0.85f},  // C6 (Fundamental foundation)
+          {1318.51f, 0.24f, 0.95f, 0.80f, 1.00f},  // E6 (Warm major third)
+          {1567.98f, 0.22f, 0.85f, 1.00f, 0.80f},  // G6 (Bright fifth)
+          {2093.00f, 0.18f, 0.70f, 0.90f, 0.90f},  // C7 (High octave sparkle)
+          {2349.32f, 0.12f, 0.55f, 0.75f, 1.00f},  // D7 (9th shimmer)
+          {3135.96f, 0.07f, 0.40f, 1.00f, 0.75f},  // G7 (Air overtone)
+          {4186.01f, 0.04f, 0.28f, 0.85f, 0.85f}   // C8 (Chime glass strike)
+      };
+
+      for (const auto& p : kPartials) {
+        const float decay_env = std::exp(-bt / p.decay);
+        const float phase_l = 2.0f * kSoundPi * (p.freq - 0.4f) * bt;
+        const float phase_r = 2.0f * kSoundPi * (p.freq + 0.4f) * bt;
+        const float val = attack * decay_env * p.amp;
+        left += val * std::sin(phase_l) * p.pan_l;
+        right += val * std::sin(phase_r) * p.pan_r;
+      }
+    }
+
+    pcm[i * 2 + 0] = std::tanh(left * 1.15f) * 0.82f;
+    pcm[i * 2 + 1] = std::tanh(right * 1.15f) * 0.82f;
+  }
+  return pcm;
+}
+
+// 2. Procedural Fractional Progress Sound
+// A crisp, snappy acoustic droplet / wooden marimba blip (~0.28s)
+// Fast micro-transient downward drop into a bright ringing note (~1568 Hz / G6).
+std::vector<float> SynthesizeProgressSound() {
+  const int total_samples = static_cast<int>(kSoundSampleRate * 0.28f);
+  std::vector<float> pcm(total_samples * 2, 0.0f);
+
+  for (int i = 0; i < total_samples; ++i) {
+    const float t = static_cast<float>(i) / kSoundSampleRate;
+    float left = 0.0f;
+    float right = 0.0f;
+
+    // Pop transient (t = 0 to 0.025s): Fast pitch bend 2200 -> 750 Hz
+    if (t < 0.025f) {
+      const float frac = t / 0.025f;
+      const float pitch = 2200.0f - 1450.0f * std::sqrt(frac);
+      const float env = (1.0f - frac);
+      const float s = 0.35f * env * std::sin(2.0f * kSoundPi * pitch * t);
+      left += s * 0.9f;
+      right += s * 0.9f;
+    }
+
+    // Cheerful micro-pip tone (G6 1568 Hz + D7 2349 Hz harmonic)
+    if (t >= 0.015f) {
+      const float bt = t - 0.015f;
+      const float attack = std::min(1.0f, bt / 0.002f);
+      const float env1 = attack * std::exp(-bt / 0.09f);
+      const float env2 = attack * std::exp(-bt / 0.05f);
+
+      const float wave1 = 0.30f * env1 * std::sin(2.0f * kSoundPi * 1567.98f * bt);
+      const float wave2 = 0.14f * env2 * std::sin(2.0f * kSoundPi * 2349.32f * bt);
+
+      left += (wave1 * 0.95f + wave2 * 0.80f);
+      right += (wave1 * 0.85f + wave2 * 1.00f);
+    }
+
+    pcm[i * 2 + 0] = std::tanh(left * 1.2f) * 0.75f;
+    pcm[i * 2 + 1] = std::tanh(right * 1.2f) * 0.75f;
+  }
+  return pcm;
+}
+
+std::vector<float> LoadCustomWavOrSynthesize(
+    const std::vector<std::filesystem::path>& candidate_paths,
+    const std::function<std::vector<float>()>& synth_fn) {
+  for (const auto& p : candidate_paths) {
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) {
+      SDL_AudioSpec wav_spec{};
+      Uint8* wav_buf = nullptr;
+      Uint32 wav_len = 0;
+      if (SDL_LoadWAV(p.string().c_str(), &wav_spec, &wav_buf, &wav_len)) {
+        SDL_AudioSpec target_spec{};
+        target_spec.channels = 2;
+        target_spec.format = SDL_AUDIO_F32LE;
+        target_spec.freq = kSoundSampleRate;
+        Uint8* dst_data = nullptr;
+        int dst_len = 0;
+        if (SDL_ConvertAudioSamples(&wav_spec, wav_buf, static_cast<int>(wav_len),
+                                    &target_spec, &dst_data, &dst_len) &&
+            dst_data) {
+          std::vector<float> result(dst_len / sizeof(float));
+          std::memcpy(result.data(), dst_data, dst_len);
+          SDL_free(dst_data);
+          SDL_free(wav_buf);
+          return result;
+        }
+        SDL_free(wav_buf);
+      }
+    }
+  }
+  return synth_fn();
+}
+
+const std::vector<float>& GetUnlockSoundPcm() {
+  static const std::vector<float> s_pcm = []() {
+    return LoadCustomWavOrSynthesize(
+        {"sound/achievement.wav", "sound/achievements/unlock.wav",
+         "game/sound/achievement.wav", "mods/sound/achievement.wav"},
+        SynthesizeUnlockSound);
+  }();
+  return s_pcm;
+}
+
+const std::vector<float>& GetProgressSoundPcm() {
+  static const std::vector<float> s_pcm = []() {
+    return LoadCustomWavOrSynthesize(
+        {"sound/progress.wav", "sound/achievements/progress.wav",
+         "game/sound/progress.wav", "mods/sound/progress.wav"},
+        SynthesizeProgressSound);
+  }();
+  return s_pcm;
+}
+
+}  // namespace
+
+// ============================================================================
 // AchievementToastDialog
 // ============================================================================
 
 AchievementToastDialog::AchievementToastDialog(rex::ui::ImGuiDrawer* drawer)
     : ImGuiDialog(drawer) {}
+
+AchievementToastDialog::~AchievementToastDialog() {
+  if (unlock_stream_) {
+    SDL_DestroyAudioStream(unlock_stream_);
+    unlock_stream_ = nullptr;
+  }
+  if (progress_stream_) {
+    SDL_DestroyAudioStream(progress_stream_);
+    progress_stream_ = nullptr;
+  }
+}
+
+void AchievementToastDialog::EnsureAudioStreams() {
+  if (unlock_stream_ && progress_stream_) {
+    return;
+  }
+
+  if (!SDL_WasInit(SDL_INIT_AUDIO)) {
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+      return;
+    }
+  }
+
+  SDL_AudioSpec spec{};
+  spec.channels = 2;
+  spec.format = SDL_AUDIO_F32LE;
+  spec.freq = kSoundSampleRate;
+
+  if (!unlock_stream_) {
+    unlock_stream_ =
+        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (unlock_stream_) {
+      SDL_ResumeAudioStreamDevice(unlock_stream_);
+    }
+  }
+
+  if (!progress_stream_) {
+    progress_stream_ =
+        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (progress_stream_) {
+      SDL_ResumeAudioStreamDevice(progress_stream_);
+    }
+  }
+}
+
+void AchievementToastDialog::PlayUnlockSound() {
+  if (!REXCVAR_GET(achievement_sound)) {
+    return;
+  }
+  EnsureAudioStreams();
+  if (!unlock_stream_) {
+    return;
+  }
+  const float vol = std::clamp(static_cast<float>(REXCVAR_GET(achievement_sound_volume)), 0.0f, 1.0f);
+  if (vol <= 0.0f) {
+    return;
+  }
+
+  const auto& pcm = GetUnlockSoundPcm();
+  if (pcm.empty()) {
+    return;
+  }
+
+  SDL_ClearAudioStream(unlock_stream_);
+  if (std::abs(vol - 1.0f) > 0.001f) {
+    std::vector<float> scaled(pcm.size());
+    for (size_t i = 0; i < pcm.size(); ++i) {
+      scaled[i] = pcm[i] * vol;
+    }
+    SDL_PutAudioStreamData(unlock_stream_, scaled.data(),
+                           static_cast<int>(scaled.size() * sizeof(float)));
+  } else {
+    SDL_PutAudioStreamData(unlock_stream_, pcm.data(),
+                           static_cast<int>(pcm.size() * sizeof(float)));
+  }
+}
+
+void AchievementToastDialog::PlayProgressSound() {
+  if (!REXCVAR_GET(achievement_sound)) {
+    return;
+  }
+  EnsureAudioStreams();
+  if (!progress_stream_) {
+    return;
+  }
+  const float vol = std::clamp(static_cast<float>(REXCVAR_GET(achievement_sound_volume)), 0.0f, 1.0f);
+  if (vol <= 0.0f) {
+    return;
+  }
+
+  const auto& pcm = GetProgressSoundPcm();
+  if (pcm.empty()) {
+    return;
+  }
+
+  SDL_ClearAudioStream(progress_stream_);
+  if (std::abs(vol - 1.0f) > 0.001f) {
+    std::vector<float> scaled(pcm.size());
+    for (size_t i = 0; i < pcm.size(); ++i) {
+      scaled[i] = pcm[i] * vol;
+    }
+    SDL_PutAudioStreamData(progress_stream_, scaled.data(),
+                           static_cast<int>(scaled.size() * sizeof(float)));
+  } else {
+    SDL_PutAudioStreamData(progress_stream_, pcm.data(),
+                           static_cast<int>(pcm.size() * sizeof(float)));
+  }
+}
 
 void AchievementToastDialog::PostToast(const AchievementToastItem& item) {
   std::lock_guard lock(mutex_);
@@ -389,6 +670,7 @@ void AchievementToastDialog::PostToast(const AchievementToastItem& item) {
     current_ = queue_.front();
     queue_.pop_front();
     start_time_ = std::chrono::steady_clock::now();
+    PlayUnlockSound();
   }
 }
 
@@ -400,6 +682,7 @@ void AchievementToastDialog::PostProgressToast(const AchievementProgressToastIte
     current_progress_ = progress_queue_.front();
     progress_queue_.pop_front();
     progress_start_time_ = std::chrono::steady_clock::now();
+    PlayProgressSound();
   }
 }
 
@@ -411,6 +694,12 @@ void AchievementToastDialog::Clear() {
   progress_queue_.clear();
   current_progress_.reset();
   is_progress_active_ = false;
+  if (unlock_stream_) {
+    SDL_ClearAudioStream(unlock_stream_);
+  }
+  if (progress_stream_) {
+    SDL_ClearAudioStream(progress_stream_);
+  }
 }
 
 bool AchievementToastDialog::WantsContinuousRepaint() const {
@@ -448,6 +737,7 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
       current_ = queue_.front();
       queue_.pop_front();
       start_time_ = now;
+      PlayUnlockSound();
     }
 
     constexpr float kEnterDuration = 0.4f;
@@ -462,6 +752,7 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
         queue_.pop_front();
         start_time_ = now;
         elapsed = 0.0f;
+        PlayUnlockSound();
       } else {
         is_active_ = false;
         current_.reset();
@@ -667,6 +958,7 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
       current_progress_ = progress_queue_.front();
       progress_queue_.pop_front();
       progress_start_time_ = now;
+      PlayProgressSound();
     }
 
     constexpr float kProgEnter = 0.20f;
@@ -680,6 +972,7 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
         current_progress_ = progress_queue_.front();
         progress_queue_.pop_front();
         progress_start_time_ = now;
+        PlayProgressSound();
       } else {
         is_progress_active_ = false;
         current_progress_.reset();

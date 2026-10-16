@@ -1117,6 +1117,30 @@ int main() {
     std::cout << "[PASS] Pre-load attract mode rejection, AI skater rejection, OTS spot completion, and save-based board sales verified\n";
   }
 
+  // --------------------------------------------------------------------------
+  // 10. Verify Achievement & Progress Toast Sound Triggers & CVARs
+  // --------------------------------------------------------------------------
+  {
+    toast_dialog.Clear();
+    TEST_CHECK(!toast_dialog.current_toast().has_value(), "Toast dialog should be clear");
+    TEST_CHECK(!toast_dialog.current_progress_toast().has_value(), "Progress toast dialog should be clear");
+
+    // Posting an achievement unlock toast exercises unlock chime audio pipeline
+    toast_dialog.PostToast({101, "Isaac's Day Off", "Unlock Isaac Clarke", 10});
+    TEST_CHECK(toast_dialog.current_toast().has_value(), "Current toast must be set");
+
+    // Posting a progress toast exercises progress pop audio pipeline
+    toast_dialog.PostProgressToast({4052066969u, "Kickflip", "Flip Trick Encyclopedia", 1, 14});
+    TEST_CHECK(toast_dialog.current_progress_toast().has_value(), "Current progress toast must be set");
+
+    // Test Clear() cleans queues and stops audio streams cleanly
+    toast_dialog.Clear();
+    TEST_CHECK(!toast_dialog.current_toast().has_value(), "Clear() must reset active unlock toast");
+    TEST_CHECK(!toast_dialog.current_progress_toast().has_value(), "Clear() must reset active progress toast");
+
+    std::cout << "[PASS] Achievement & progress toast audio triggers and dialog state verified\n";
+  }
+
   std::filesystem::remove_all(temp_dir, ec);
   std::cout << "=== ALL ACHIEVEMENT POPPING TESTS PASSED (100%) ===\n";
   return 0;

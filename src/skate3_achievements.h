@@ -28,6 +28,8 @@ class ImmediateDrawer;
 class ImmediateTexture;
 }
 
+struct SDL_AudioStream;
+
 namespace skate3 {
 
 class AchievementManager;
@@ -76,7 +78,7 @@ struct AchievementProgressToastItem {
 class AchievementToastDialog final : public rex::ui::ImGuiDialog {
  public:
   explicit AchievementToastDialog(rex::ui::ImGuiDrawer* drawer);
-  ~AchievementToastDialog() override = default;
+  ~AchievementToastDialog() override;
 
   void PostToast(const AchievementToastItem& item);
   void PostProgressToast(const AchievementProgressToastItem& item);
@@ -97,6 +99,10 @@ class AchievementToastDialog final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override;
 
  private:
+  void EnsureAudioStreams();
+  void PlayUnlockSound();
+  void PlayProgressSound();
+
   mutable std::mutex mutex_;
   std::deque<AchievementToastItem> queue_;
   std::optional<AchievementToastItem> current_;
@@ -108,6 +114,11 @@ class AchievementToastDialog final : public rex::ui::ImGuiDialog {
   std::optional<AchievementProgressToastItem> current_progress_;
   std::chrono::steady_clock::time_point progress_start_time_;
   bool is_progress_active_ = false;
+
+  // Audio streams for achievement unlocks and progress popups
+  bool audio_initialized_ = false;
+  ::SDL_AudioStream* unlock_stream_ = nullptr;
+  ::SDL_AudioStream* progress_stream_ = nullptr;
 
   AchievementManager* manager_ = nullptr;
 };
